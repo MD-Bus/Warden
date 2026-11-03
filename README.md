@@ -12,7 +12,7 @@ with independent statuses, shared or separate expiry dates, and app-owned releas
 <a href="https://deploy.workers.cloudflare.com/?url=https://github.com/momardia54/Warden"><img src="https://deploy.workers.cloudflare.com/button" alt="Deploy to Cloudflare"></a>
 </p>
 
-> **Status: pre-1.0 (latest release 0.4.1; 0.5.0 in development).** It works and is tested, but the API and data model may still change before 1.0.0; every change is listed in [CHANGELOG.md](CHANGELOG.md). Versioning and the plan to 1.0.0: [Roadmap.md](Roadmap.md). Security model: [Security.md](Security.md).
+> **Status: pre-1.0 — build 0.5.0.** This README describes the tagged app licensing model. The API and data model may still change before 1.0.0; every change is listed in [CHANGELOG.md](CHANGELOG.md). The Deploy button installs `main`; an approved build on `develop` becomes the default installation after its release pull request is merged. See [Roadmap.md](Roadmap.md) for versioning and [Security.md](Security.md) for the security model.
 
 ![Warden overview](docs/screenshots/overview.jpg)
 
@@ -37,6 +37,12 @@ Every attachment selects a status defined by its app. Completed can remain valid
 **Licence templates** prefill tags and optional apps. For example, a WordPress template supplies `parent-theme` and `child-theme`, leaving the customer's child-theme app to select. Required slots must be filled; optional slots may be skipped. Updating a template leaves existing licences intact.
 
 Tags are unique within a licence and separate from Git version tags or release tracks. Keep them stable once the site uses them. [Apps and licences](docs/apps.md) explains the model.
+
+## Upgrading to 0.5.0
+
+Back up D1 and R2 before upgrading. Migration 0016 runs on the first request, converting standalone projects and licence-specific releases into apps while preserving existing licence keys, signing keys, file ids, stored packages and download links. Existing licences start with shared expiry and one attachment tagged `default`.
+
+Management clients must read status and validity from each entry in `apps`. Before attaching a second app to an existing licence, update the site's checks and downloads to select its tag: a multi-app response without a tag has separate app results. Status changes require a tag; shared renewal omits it, while separate renewal requires it. The [0.4 to 0.5 upgrade notes](docs/upgrade-notes.md) cover the response changes, migrated release overrides and deprecated API fields.
 
 ## How it works
 

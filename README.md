@@ -99,7 +99,7 @@ export PATH=/opt/homebrew/opt/node@22/bin:$PATH
 npm run review
 ```
 
-This starts `http://127.0.0.1:5180`, seeds demonstration apps, sample release archives, a WordPress template and licences using both expiry modes. It prints a temporary local admin password; credentials stay in process memory. Keep the terminal open and sign in with those credentials. Sample archives contain a README, not an installable theme or plugin. No Cloudflare deployment is performed. Remove or move an existing `.dev.vars` first, because it can override process environment credentials.
+This starts `http://127.0.0.1:5180`, seeds demonstration apps, sample release archives, a WordPress template and licences using both expiry modes. It prints a temporary local admin password; credentials stay in process memory and Wrangler file logging is disabled. Keep the terminal open and sign in with those credentials. Sample archives contain a README, not an installable theme or plugin. No Cloudflare deployment is performed. Remove or move an existing `.dev.vars` first, because it can override process environment credentials.
 
 ## Run and deploy
 

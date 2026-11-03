@@ -18,7 +18,7 @@ const child = spawn("npm", ["run", "dev", "--", "--port", "5180", "--host", "127
     CLOUDFLARE_INCLUDE_PROCESS_ENV: "true",
     CLOUDFLARE_VITE_FORCE_LOCAL: "true",
     WRANGLER_SEND_METRICS: "false",
-    WRANGLER_LOG_PATH: process.platform === "win32" ? "NUL" : "/dev/null",
+    WRANGLER_WRITE_LOGS: "false",
   },
   detached: process.platform !== "win32",
   stdio: ["ignore", "pipe", "pipe"],

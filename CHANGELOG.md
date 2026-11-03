@@ -17,6 +17,10 @@ All notable changes, newest first. Warden follows [semantic versioning](https://
 - Tag-scoped checks, downloads, update selection, reported versions, activity and webhook events. Checks without a tag return separate app results for multi-app licences.
 - `npm run review` starts a local instance with demonstration apps, releases, templates and both expiry modes. Credentials stay in process memory.
 
+### Fixed
+
+- The local review command disables Wrangler file logging directly. A null-device log path was interpreted as a directory and caused an additional startup error.
+
 ### Changed
 
 - Apps own status definitions, files, release tracks and repository connections. The dashboard no longer creates standalone licences or licence-owned releases.

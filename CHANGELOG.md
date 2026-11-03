@@ -11,6 +11,11 @@ All notable changes, newest first. Warden follows [semantic versioning](https://
 
 ### Fixed
 
+- The licence page again has tabs (Apps, Integration, Sites, Activity) and a summary of check results, next expiry, sites and last check. Restored from 0.4: the details panel (expiry mode, allowed domains, site limit, grace override, public message, external reference, creation date, notes), the download list URL and example request, activity filters, blocked addresses and the update badges per reported version. Each app card shows its check result, expiry, grace period, last check and latest release; the status button shows when a change is being saved and errors appear on the card. The public signing key is on the Integration tab, as before 0.5.0.
+- A check without a tag on a licence with several apps registered the domain and counted the site's check once per app. It now registers the domain once, reads the status sets and sites once, and records every app's check in one database batch.
+- The page of an app now lists the project apps created from it by migration 0016, so licences that moved to a project app can be found from the original app. The project app's page loads its inherited releases in parallel with the rest.
+- `npm run review` seeded the wrong server when port 5180 was already in use. It now stops instead, and `REVIEW_PORT` selects another port.
+
 - Licence and template tag inputs used a pattern that modern browsers could not compile under HTML's Unicode sets rules. Both forms now use the shared server validation pattern with an escaped hyphen, restoring native input validation for tags such as `parent-theme` and `child_theme`. Existing tags, API validation rules and database data are unchanged. No migration is required.
 
 ## 0.5.0 (2026-11-03)

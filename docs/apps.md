@@ -59,4 +59,4 @@ An app cannot be deleted while any licence attaches it, a template selects it, o
 
 ## Existing installations
 
-Migration 0016 converts standalone licences into project apps and attaches them under `default`. Existing keys and file links keep working. A licence with custom releases gets a project app that retains its overrides and inherits the original app's releases for other statuses. See [upgrade-notes.md](upgrade-notes.md).
+Migration 0016 converts standalone licences into project apps and attaches them under `default`. Existing keys and file links keep working. A licence with custom releases gets a project app that retains its overrides and inherits the original app's releases for other statuses. The licence is then listed under the project app, not the original one: the original app's page links to its project apps, and each project app's page links back. Rename a project app from Edit. See [upgrade-notes.md](upgrade-notes.md).

@@ -395,3 +395,30 @@ test("tag input patterns compile in browser Unicode sets mode and agree with ser
     assert.equal(validTag(tag), false, JSON.stringify(tag))
   }
 })
+
+test("a check without a tag registers the domain once, records every app in one request and keeps the shared site limit", async () => {
+  const s = await setup(),
+    l = await s.licence()
+  const first = await s.check(l.key, "", { domain: "harborstudio.com", versions: { "parent-theme": "2.0.0", "child-theme": "1.1.0" } })
+  assert.deepEqual(
+    first.json.apps.map((a: any) => [a.tag, a.valid]),
+    [
+      ["parent-theme", true],
+      ["child-theme", true],
+    ],
+  )
+  // One request is one check for the site, whatever the number of attached apps.
+  const site = s.db.raw.prepare("SELECT domain, check_count FROM activations").all() as any[]
+  assert.deepEqual(
+    site.map((r) => [r.domain, r.check_count]),
+    [["harborstudio.com", 1]],
+  )
+  assert.equal((s.db.raw.prepare("SELECT COUNT(*) AS n FROM activity WHERE event = 'check'").get() as any).n, 2)
+  assert.equal((s.db.raw.prepare("SELECT COUNT(*) AS n FROM activation_versions").get() as any).n, 2)
+  const other = await s.check(l.key, "domain=other.example")
+  assert.deepEqual(
+    other.json.apps.map((a: any) => a.status),
+    ["site_limit_reached", "site_limit_reached"],
+  )
+  assert.equal((s.db.raw.prepare("SELECT COUNT(*) AS n FROM activations").get() as any).n, 1)
+})

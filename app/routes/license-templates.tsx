@@ -10,7 +10,7 @@ import { Button } from "#/components/ui/button"
 import { Input } from "#/components/ui/input"
 import { Textarea } from "#/components/ui/textarea"
 import { NativeSelect } from "#/components/ui/native-select"
-import type { ExpiryMode, TemplateSlot } from "#/lib/entitlements"
+import { TAG_PATTERN, type ExpiryMode, type TemplateSlot } from "#/lib/entitlements"
 import { requireAuth } from "~/server/auth.server"
 import { listApps } from "~/server/apps.server"
 import { getTemplate, listTemplates, saveTemplate } from "~/server/entitlements.server"
@@ -136,7 +136,7 @@ function TemplateEditor({ editing, apps, error }: { editing: Route.ComponentProp
         <div key={i} className="grid items-end gap-3 rounded border p-3 sm:grid-cols-[1fr_1fr_auto_auto]">
           <div className="space-y-2">
             <FieldLabel htmlFor={`slot-tag-${i}`}>Tag</FieldLabel>
-            <Input id={`slot-tag-${i}`} required pattern="[a-z][a-z0-9_-]{0,47}" maxLength={48} value={s.tag} onChange={(e) => change(i, { tag: e.target.value })} />
+            <Input id={`slot-tag-${i}`} required pattern={TAG_PATTERN.source} maxLength={48} value={s.tag} onChange={(e) => change(i, { tag: e.target.value })} />
           </div>
           <div className="space-y-2">
             <FieldLabel htmlFor={`slot-app-${i}`}>Default app</FieldLabel>

@@ -1,3 +1,4 @@
+import { TAG_PATTERN, validTag } from "../app/lib/entitlements.ts"
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
@@ -379,4 +380,18 @@ test("failed API app selection leaves the existing licence unchanged and preserv
   assert.equal((await queryLicenses(s.env, { q: "child-theme", limit: 10 })).length, 1)
   await s.api("DELETE", `/licenses/${l.id}/activations/harborstudio.com`)
   assert.equal((s.db.raw.prepare("SELECT COUNT(*) AS n FROM activation_versions").get() as any).n, 0)
+})
+
+test("tag input patterns compile in browser Unicode sets mode and agree with server validation", () => {
+  const browser = new RegExp(TAG_PATTERN.source, "v")
+  const valid = ["parent-theme", "child_theme", "a", "a0", "a".repeat(48)]
+  const invalid = ["", "Parent-theme", "0theme", "-theme", "theme name", "theme/theme", "theme|theme", "theme\\theme", "a".repeat(49), "parent-theme\n"]
+  for (const tag of valid) {
+    assert.equal(browser.test(tag), true, tag)
+    assert.equal(validTag(tag), true, tag)
+  }
+  for (const tag of invalid) {
+    assert.equal(browser.test(tag), false, JSON.stringify(tag))
+    assert.equal(validTag(tag), false, JSON.stringify(tag))
+  }
 })

@@ -14,6 +14,8 @@ A **licence** gives a customer access to one or more apps through one key. Each 
 
 The customer's site stores one licence key. It checks `?tag=parent-theme` for the parent theme and `?tag=child-theme` for its child theme. Other customers can attach different child-theme apps under the same tag.
 
+The licence and template forms validate tags using the same pattern as the server. Version 0.5.1 fixes browser compatibility of that validation without changing the accepted tag format.
+
 Tags are unique within a licence. They start with a lowercase letter and contain up to 48 lowercase letters, digits, underscores or hyphens. Keep them stable after a site starts using them. Tags identify app attachments; they are separate from Git version tags and release tracks. An app may appear under several different tags, with independent access settings.
 
 ## Creating an app

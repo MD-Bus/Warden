@@ -7,6 +7,12 @@ All notable changes, newest first. Warden follows [semantic versioning](https://
 - **0.6.0, trust**: end-to-end tests on real Cloudflare (GitHub App, private repositories, phone width, CI), backups and export, two-factor sign-in or Cloudflare Access, a complete OpenAPI description checked by tests, independent security review
 - **1.0.0**: the check response and the API are frozen
 
+## 0.5.1 (unreleased)
+
+### Fixed
+
+- Licence and template tag inputs used a pattern that modern browsers could not compile under HTML's Unicode sets rules. Both forms now use the shared server validation pattern with an escaped hyphen, restoring native input validation for tags such as `parent-theme` and `child_theme`. Existing tags, API validation rules and database data are unchanged. No migration is required.
+
 ## 0.5.0 (2026-11-03)
 
 One licence key for several tagged apps, with shared or separate expiry dates and reusable licence templates. Migration 0016 runs on the first request. Read the [0.4 to 0.5 upgrade notes](docs/upgrade-notes.md) before updating API clients or attaching a second app to an existing licence.

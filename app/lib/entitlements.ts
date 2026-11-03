@@ -1,7 +1,8 @@
 export const EXPIRY_MODES = ["shared", "separate"] as const
 export type ExpiryMode = (typeof EXPIRY_MODES)[number]
 export const MAX_LICENSE_APPS = 50
-export const TAG_PATTERN = /^[a-z][a-z0-9_-]{0,47}$/
+/** HTML input patterns use Unicode sets mode, where a literal hyphen must be escaped. */
+export const TAG_PATTERN = /^[a-z][a-z0-9_\-]{0,47}$/
 export const validTag = (value: unknown): value is string => typeof value === "string" && TAG_PATTERN.test(value)
 export const isExpiryMode = (value: unknown): value is ExpiryMode => value === "shared" || value === "separate"
 export type TemplateSlot = { tag: string; app: string | null; required: boolean }

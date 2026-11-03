@@ -16,6 +16,22 @@ The export contains everything Warden stores, including the private signing key 
 
 Database migrations run by themselves on the first request after the update, and only move forward: to go back to an earlier version, restore the export.
 
+## 0.4 to 0.5
+
+Back up D1 and R2 before upgrading. Migration 0016 is automatic and preserves licence keys, the installation's signing key, file ids, checksums, R2 object keys, repository credentials, import progress and download URLs.
+
+- Existing standalone projects become apps and are attached under `default`. Custom status definitions move to the project app. Existing app licences also receive a `default` attachment.
+- A licence with its own releases, tracks or repository connections gets a project app. Its original app continues supplying releases for statuses the project's tracks do not override. Status definitions are copied to the project app and can then be edited independently. The base app cannot be deleted while this inheritance exists. R2 packages are not copied.
+- Existing licences start with shared expiry and their original date. Registered domains and versions are preserved. Old single-app check and download URLs continue working without a tag.
+- Management API responses for migrated licences now contain `apps`, with per-tag status and validity. Update consumers of singular `app`, `status`, `stored_status`, `valid` and grace fields to read each app entry.
+- New integrations create licences with `apps` and `expiry_mode`. Each selected status comes from its app. Status changes require `tag`; separate renewals require it, shared renewals omit it.
+- Writes to migrated licence-owned files, tracks and statuses return `409 app_owned`. Manage those resources on their apps. Reads select `?tag=` when multiple apps are attached.
+- Before adding a second app to a licence, update its site code to select the intended tag. Without a tag, a multi-app check returns `apps` and has no top-level validity/update. Verify the signed response's tag and app identity as well as key, domain and nonce.
+- Templates apply only at creation. Switching separate dates to shared requires an explicit shared date or null. Grace periods still follow the licence override, then attachment override, then app setting.
+- CSV exports have one row per app attachment and add `tag` and `expiry_mode`. Historical events retain their migrated app/tag attribution.
+
+The legacy singular request format remains available until 1.0 for older integrations; prefer the tagged model. See [api.md](api.md) and [apps.md](apps.md).
+
 ## 0.3 to 0.4
 
 Migration 0014 runs on the first request: it adds grace periods and webhooks. Nothing breaks; there is nothing to change unless you use the features below.

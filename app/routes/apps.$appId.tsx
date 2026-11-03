@@ -21,7 +21,7 @@ import { requireAuth } from "~/server/auth.server"
 import { deleteApp, getApp, getAppSummary, versionsInUse } from "~/server/apps.server"
 import { applyFileForm, listFiles, storageConfigured } from "~/server/files.server"
 import { applySourceForm, trackPanels } from "~/server/sources.server"
-import { applyTrackForm } from "~/server/tracks.server"
+import { applyTrackForm, listAppTracks } from "~/server/tracks.server"
 import { getGitHubApp } from "~/server/github-app.server"
 import { applyStatusForm, getStatusSetForApp, hasCustomSet, statusCounts } from "~/server/statuses.server"
 import { queryLicenses } from "~/server/licenses.server"
@@ -44,8 +44,13 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
     trackPanels(env, { app }, new URL(request.url).origin),
     getGitHubApp(env),
   ])
+  const baseApp=app.base_app_id ? await getApp(env,app.base_app_id) : null
+  const baseFiles=baseApp ? await listFiles(env,{app:baseApp}) : []
+  const baseTracks=baseApp ? await listAppTracks(env,baseApp.id) : []
+  const covered=new Set(tracks.flatMap((p) => p.track.statuses))
+  const inherited=baseApp ? {appName:baseApp.name,appHref:`/apps/${baseApp.id}`,statuses,tracks:baseTracks.map((t) => ({...t,statuses:t.statuses.split(","),check_domain:t.check_domain === 1})),files:baseFiles.map((f) => f.track_id ? {...f,statuses:f.statuses.split(",").filter((s) => !covered.has(s)).join(",")} : f)} : null
   const usage = custom ? await statusCounts(env, { app: app.id }) : {}
-  return { app, licenses, files, statuses, custom, usage, versions, traffic: traffic.series, filesConfigured: storageConfigured(env), tracks, githubApp: githubApp !== null }
+  return { app, inherited, licenses, files, statuses, custom, usage, versions, traffic: traffic.series, filesConfigured: storageConfigured(env), tracks, githubApp: githubApp !== null }
 }
 
 export function shouldRevalidate(args: ShouldRevalidateFunctionArgs) {
@@ -79,7 +84,7 @@ const TABS = ["licences", "releases", "statuses"]
 
 export default function AppPage({ loaderData, actionData }: Route.ComponentProps) {
   const actionError = actionData && "error" in actionData ? actionData.error : null
-  const { app, licenses, files, statuses, custom, usage, versions, traffic, filesConfigured, tracks, githubApp } = loaderData
+  const { app, inherited, licenses, files, statuses, custom, usage, versions, traffic, filesConfigured, tracks, githubApp } = loaderData
   const checks = traffic.reduce((n, d) => n + d.valid + d.invalid, 0)
   const [tab, setTab] = useRouteTab(TABS)
   const [deleting, setDeleting] = useState(false)
@@ -189,6 +194,7 @@ export default function AppPage({ loaderData, actionData }: Route.ComponentProps
           </Link>
         </p>
 
+        {inherited && <p className="text-sm text-muted-foreground">This migrated project inherits releases from <Link to={inherited.appHref} className="underline">{inherited.appName}</Link> for statuses its own tracks do not override. Status definitions are managed on this project app.</p>}
         <div className="space-y-5">
           <RouteTabs
             value={tab}
@@ -206,6 +212,7 @@ export default function AppPage({ loaderData, actionData }: Route.ComponentProps
             <div className="space-y-8">
               {versions.sites > 0 && <VersionAdoption versions={versions} />}
               <FilesSection
+                shared={inherited}
                 ownerLabel="app"
                 description="Releases and files shared by every licence of this app. Releases are grouped in tracks: each track serves a set of licence statuses, and a licence is offered the latest release of its status's track."
                 uploadPath={`/apps/${app.id}/files`}

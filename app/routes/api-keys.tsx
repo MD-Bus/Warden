@@ -41,7 +41,8 @@ export async function action({ request, context }: Route.ActionArgs) {
     if (!name) return data({ error: "Give the key a name." }, { status: 400 })
     const scope = String(form.get("scope"))
     if (!(SCOPES as readonly string[]).includes(scope)) return data({ error: "Unknown access level." }, { status: 400 })
-    return data({ created: (await createApiKey(env, name, scope as Scope)).secret })
+    const created = await createApiKey(env, name, scope as Scope)
+    return data({ created: created.secret, id: created.id })
   }
   if (intent === "revoke") {
     await revokeApiKey(env, String(form.get("id")))
@@ -71,11 +72,11 @@ export default function ApiKeys({ loaderData }: Route.ComponentProps) {
   const example = `# issue a licence under an app (the app's defaults apply; safe to retry: the same external_ref returns the first one)
 curl -X POST ${origin}/api/v1/licenses \\
   -H "Authorization: Bearer $WARDEN_KEY" -H "Content-Type: application/json" \\
-  -d '{"name": "Harbor Studio website", "app": "harbor-theme", "customer_name": "Harbor Studio", "customer_email": "billing@harborstudio.com", "external_ref": "order-1042"}'
+  -d '{"name": "Harbor Studio website", "expiry_mode": "shared", "apps": [{"tag":"parent-theme","app":"harbor-theme"}], "customer_name": "Harbor Studio", "customer_email": "billing@harborstudio.com", "external_ref": "order-1042"}'
 
 # renew it by 30 days, then suspend it
 curl -X POST ${origin}/api/v1/licenses/<id>/renew  -H "Authorization: Bearer $WARDEN_KEY" -d '{"days": 30}'
-curl -X POST ${origin}/api/v1/licenses/<id>/status -H "Authorization: Bearer $WARDEN_KEY" -d '{"status": "suspended"}'`
+curl -X POST ${origin}/api/v1/licenses/<id>/status -H "Authorization: Bearer $WARDEN_KEY" -d '{"tag":"parent-theme","status":"suspended"}'`
 
   return (
     <>

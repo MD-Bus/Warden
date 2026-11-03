@@ -1,3 +1,4 @@
+import { handleBundleCheck } from "./bundle-check.server"
 import { buildCheckResponse, KEY_PATTERN, normalizeDomain, type CheckResponse } from "../lib/license"
 import { clientIp, reportUnknownKey } from "./guard.server"
 import { applyRules } from "./protection.server"
@@ -21,7 +22,7 @@ const NONCE_PATTERN = /^[A-Za-z0-9._~-]{8,64}$/
  * What a site sends with a check: its domain, and optionally the version it runs, the release channel it follows and
  * a nonce to echo.
  */
-type CheckRequest = { domain: string | null; version: string | null; channel: Channel; nonce: string | null }
+type CheckRequest = { domain: string | null; version: string | null; channel: Channel; nonce: string | null; tag: string | null }
 
 async function readCheckRequest(request: Request): Promise<CheckRequest> {
   const q = new URL(request.url).searchParams
@@ -42,6 +43,7 @@ async function readCheckRequest(request: Request): Promise<CheckRequest> {
   const channel = pick("channel")
   const nonce = pick("nonce")
   return {
+    tag: pick("tag"),
     domain: domainRaw ? normalizeDomain(domainRaw) : null,
     version: readReportedVersion(pick("version")),
     channel: isChannel(channel) ? channel : "stable",
@@ -66,14 +68,14 @@ export async function handleCheck(request: Request, env: Env, ctx: ExecutionCont
   if (request.method !== "GET" && request.method !== "POST") return json({ error: "Use GET or POST" }, { status: 405, headers: CORS })
 
   const now = Date.now()
-  const { domain, version, channel, nonce } = await readCheckRequest(request)
-
   const license = KEY_PATTERN.test(key) ? await getLicenseByKey(env, key) : null
+  if (license && license.expiry_mode !== "legacy" && license.expiry_mode) return handleBundleCheck(request, env, ctx, license)
+  const { domain, version, channel, nonce, tag } = await readCheckRequest(request)
   // Activations only matter for the limit, so they are loaded only for licences that have one.
   const activated = license && license.max_sites !== null ? (await listActivations(env, license.id)).map((a) => a.domain) : []
   const set = license ? await getStatusSetForLicense(env, license) : DEFAULT_STATUSES
   const signing = await getSigningKey(env)
-  const result: CheckResponse = { ...buildCheckResponse(license, domain, now, activated, set), license_key: key, domain, nonce }
+  const result: CheckResponse = { ...buildCheckResponse(license, domain, now, activated, set), license_key: key, domain, nonce, ...(tag !== null ? {tag} : {}) }
   if (license && version) {
     const files = await visibleFiles(env, license, domain, result, now, set, new URL(request.url).origin)
     const latest = latestRelease(files.filter((f) => f.available), channel)

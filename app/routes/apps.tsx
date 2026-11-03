@@ -44,7 +44,7 @@ export default function Apps({ loaderData }: Route.ComponentProps) {
                 <Boxes />
               </EmptyMedia>
               <EmptyTitle>No apps yet</EmptyTitle>
-              <EmptyDescription>Create an app for a plugin, theme or any product you sell to several customers. You can still issue standalone licences without one.</EmptyDescription>
+              <EmptyDescription>Create an app for a product or a custom project, then attach it to customer licences.</EmptyDescription>
             </EmptyHeader>
             <Button asChild>
               <Link to="/apps/new">

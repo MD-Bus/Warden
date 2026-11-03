@@ -19,12 +19,12 @@ export type TrafficScope = { app?: string } | { standalone: true } | { license: 
 const SITE_NOT_REGISTERED = ["domain_mismatch", "site_limit_reached"]
 
 /** Which set of statuses a licence's checks are read against: "a:<app>", "l:<licence>" (own statuses) or "" (defaults). */
-const OWNER = `CASE WHEN l.app_id IS NOT NULL THEN 'a:' || l.app_id WHEN EXISTS (SELECT 1 FROM statuses s WHERE s.license_id = l.id) THEN 'l:' || l.id ELSE '' END`
+const OWNER = `CASE WHEN COALESCE(a.app_id,l.app_id) IS NOT NULL THEN 'a:' || COALESCE(a.app_id,l.app_id) WHEN EXISTS (SELECT 1 FROM statuses s WHERE s.license_id = l.id) THEN 'l:' || l.id ELSE '' END`
 
 /** The scope as a condition on `l` (the licence); `licenseColumn` is the licence id column of the table read. */
 function scopeSql(scope: TrafficScope, licenseColumn = "a.license_id"): { sql: string; binds: string[] } {
   if ("license" in scope && scope.license) return { sql: ` AND ${licenseColumn} = ?`, binds: [scope.license] }
-  if ("app" in scope && scope.app) return { sql: " AND l.app_id = ?", binds: [scope.app] }
+  if ("app" in scope && scope.app) return { sql: licenseColumn === "ac.license_id" ? " AND (l.app_id = ? OR EXISTS (SELECT 1 FROM license_apps e WHERE e.license_id=l.id AND e.app_id=?))" : " AND COALESCE(a.app_id,l.app_id) = ?", binds: licenseColumn === "ac.license_id" ? [scope.app,scope.app] : [scope.app] }
   if ("standalone" in scope && scope.standalone) return { sql: " AND l.app_id IS NULL", binds: [] }
   return { sql: "", binds: [] }
 }
@@ -117,7 +117,7 @@ export async function trafficReport(env: Env, scope: TrafficScope, days: number,
       .first<{ n: number }>(),
     env.DB.prepare(
       `SELECT a.license_id AS id, l.name AS name, ap.name AS app_name, l.last_check_at AS last_check_at, a.status AS status, ${OWNER} AS owner, COUNT(*) AS n
-       FROM activity a JOIN licenses l ON l.id = a.license_id LEFT JOIN apps ap ON ap.id = l.app_id
+       FROM activity a JOIN licenses l ON l.id = a.license_id LEFT JOIN apps ap ON ap.id = COALESCE(a.app_id,l.app_id)
        WHERE a.event = 'check' AND a.at >= ?${s.sql} GROUP BY a.license_id, a.status`
     )
       .bind(from, ...s.binds)
@@ -146,7 +146,7 @@ export async function trafficReport(env: Env, scope: TrafficScope, days: number,
       ? env.DB.prepare("SELECT kind, SUM(count) AS n FROM refused_requests WHERE day >= ? GROUP BY kind").bind(from / DAY_MS).all<{ kind: string; n: number }>()
       : Promise.resolve(null),
     env.DB.prepare(`SELECT COUNT(*) AS n FROM activations ac JOIN licenses l ON l.id = ac.license_id WHERE ac.first_seen_at >= ?${scopeSql(scope, "ac.license_id").sql}`)
-      .bind(from, ...s.binds)
+      .bind(from, ...scopeSql(scope, "ac.license_id").binds)
       .first<{ n: number }>(),
   ])
   const { series, checks, sets } = daily

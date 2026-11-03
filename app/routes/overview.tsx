@@ -43,7 +43,7 @@ export default function Overview({ loaderData }: Route.ComponentProps) {
       <div className="space-y-8 p-4 pt-0 lg:px-6">
         <PageTitle
           title="Overview"
-          description={stats.total === 0 ? "Nothing issued yet. Start with an app for a product you sell, or a standalone licence for a single project." : `${stats.total} licence${stats.total === 1 ? "" : "s"}, ${stats.valid} valid.`}
+          description={stats.total === 0 ? "Nothing issued yet. Create apps for your products or custom projects, then attach them to a licence." : `${stats.total} licence${stats.total === 1 ? "" : "s"}, ${stats.valid} valid.`}
           actions={
             <>
               <Button asChild variant="outline">
@@ -59,8 +59,8 @@ export default function Overview({ loaderData }: Route.ComponentProps) {
         />
 
         <FactStrip>
-          <Fact label="Valid licences" to="/licenses?view=valid" value={stats.valid} detail={`of ${stats.total} licences`} help="Licences for which a check currently returns valid: true." />
-          <Fact label="Invalid licences" to="/licenses?view=invalid" value={stats.invalid} detail="Checks return valid: false" help="Licences for which a check currently returns valid: false, such as pending, suspended, disabled or expired licences." />
+          <Fact label="Valid licences" to="/licenses?view=valid" value={stats.valid} detail={`of ${stats.total} licences`} help="Licences for which every attached app is valid." />
+          <Fact label="Invalid licences" to="/licenses?view=invalid" value={stats.invalid} detail="At least one app is invalid" help="Licences with at least one invalid app, such as pending, suspended, disabled or expired access." />
           <Fact
             label={VIEW_LABELS.expiring}
             to="/licenses?view=expiring&sort=expires&dir=asc"
@@ -123,9 +123,9 @@ export default function Overview({ loaderData }: Route.ComponentProps) {
                     </div>
                     <span className="text-sm text-amber-700 tabular-nums dark:text-amber-400">
                       {/* Listed licences are valid: one whose date has passed is in its grace period. */}
-                      {l.expires_at !== null && daysUntil(l.expires_at) < 0 ? `Expired ${describeExpiry(l.expires_at)}, in grace period` : `Expires ${describeExpiry(l.expires_at)}`}
+                      {l.expiry_mode === "separate" ? l.apps?.filter((e) => e.expiring).map((e) => `${e.tag}: ${describeExpiry(e.grace_ends_at ?? e.expires_at)}`).join(", ") : l.expires_at !== null && daysUntil(l.expires_at) < 0 ? `Expired ${describeExpiry(l.expires_at)}, in grace period` : `Expires ${describeExpiry(l.expires_at)}`}
                     </span>
-                    <QuickExtend licenseId={l.id} />
+                    {l.expiry_mode === "separate" ? <Button asChild variant="outline" size="sm"><Link to={`/licenses/${l.id}`}>Renew apps</Link></Button> : <QuickExtend licenseId={l.id} />}
                   </div>
                 ))}
                 {attention.silent.map((l) => (
@@ -268,7 +268,7 @@ function QuickExtend({ licenseId }: { licenseId: string }) {
   return (
     <div className="flex gap-1">
       {[30, 365].map((days) => (
-        <Button key={days} variant="outline" size="sm" disabled={busy} onClick={() => fetcher.submit({ intent: "extend", days: String(days) }, { method: "post", action: `/licenses/${licenseId}` })}>
+        <Button key={days} variant="outline" size="sm" disabled={busy} onClick={() => fetcher.submit({ intent: "renew", days: String(days) }, { method: "post", action: `/licenses/${licenseId}` })}>
           +{days === 365 ? "1 year" : `${days} days`}
         </Button>
       ))}

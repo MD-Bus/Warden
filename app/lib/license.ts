@@ -46,6 +46,7 @@ export function domainAllowed(allowed: string[], domain: string | null): boolean
 
 export type CheckResponse = {
   valid: boolean
+  tag?: string | null
   /** A licence status key, or one of "unknown", "domain_mismatch" and "site_limit_reached". */
   status: string
   message: string

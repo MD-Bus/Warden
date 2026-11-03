@@ -85,8 +85,8 @@ async function countEvents(env: Env, ip: string, kind: IpEventKind, since: numbe
 async function countRefusedChecks(env: Env, ip: string, since: number): Promise<number> {
   const rows = (
     await env.DB.prepare(
-      `SELECT a.status AS status, l.app_id AS app_id, l.id AS license_id, COUNT(*) AS n FROM activity a JOIN licenses l ON l.id = a.license_id
-       WHERE a.ip = ? AND a.at >= ? AND a.event = 'check' GROUP BY a.status, l.app_id, l.id`
+      `SELECT a.status AS status, COALESCE(a.app_id,l.app_id) AS app_id, l.id AS license_id, COUNT(*) AS n FROM activity a JOIN licenses l ON l.id = a.license_id
+       WHERE a.ip = ? AND a.at >= ? AND a.event = 'check' GROUP BY a.status, COALESCE(a.app_id,l.app_id), l.id`
     )
       .bind(ip, since)
       .all<{ status: string; app_id: string | null; license_id: string; n: number }>()

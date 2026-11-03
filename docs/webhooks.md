@@ -4,6 +4,10 @@ Warden can call your own URLs when something happens to a licence: it is created
 
 Set them up in the dashboard under **Integrations**, *Webhooks*, or through the API (`/api/v1/webhooks`, below). An installation can have up to 10 webhooks, each with its own address and events.
 
+## Tagged app context
+
+The `license` in each event carries `expiry_mode` and `apps`. App status changes and time events also carry `tag` and `app_id`. Expiry and grace events run independently for each app; shared dates can produce separate events when apps have different status rules or grace settings. Separate renewal names the renewed tag; shared renewal uses `tag: null`. Deletion still sends the complete licence before removing it.
+
 ## Events
 
 | Event | Sent when | Extra data |

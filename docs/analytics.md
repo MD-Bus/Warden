@@ -15,7 +15,7 @@ It is not visitor analytics for your customers' websites: Warden only sees the c
 
 | Part | What it shows |
 |---|---|
-| Period and app | 7, 30 or 90 days, ending today; every licence, the licences of one app, or the standalone licences. Both are kept in the address, so a view can be bookmarked |
+| Period and app | 7, 30 or 90 days, ending today; every licence, the licences of one app, or one licence. Both are kept in the address, so a view can be bookmarked |
 | Checks | Every call of a check URL in the period, and the share answered as valid |
 | Invalid checks | Checks answered with `valid: false` |
 | Active sites | Distinct sites (a licence on a domain) that checked in during the period, and how many registered for the first time |
@@ -32,7 +32,7 @@ Lists show their first eight rows; **View all** shows up to 100. The charts on t
 
 Hover a day (or focus a chart and use the arrow keys) to read its values. **Table** switches any chart to a table of every day.
 
-The overview shows the checks of the last 30 days across all licences, each app shows its own on its page, and each licence on its **Activity** tab.
+The overview shows the checks of the last 30 days across all licences, each app shows its own on its page, and each licence's activity log.
 
 ## How the figures are computed
 
@@ -49,7 +49,7 @@ The overview shows the checks of the last 30 days across all licences, each app 
 | Parameter | Values |
 |---|---|
 | `days` | `7`, `30` (default) or `90` |
-| `app` | An app id or slug, or `none` for standalone licences |
+| `app` | An app id or slug. `none` is retained for legacy API-created standalone licences |
 | `license` | A licence id or key (takes precedence over `app`) |
 
 The report also has `ips` (top IP addresses) and, for all licences, `totals.blocked` and `totals.rate_limited`.
@@ -67,3 +67,7 @@ The report also has `ips` (top IP addresses) and, for all licences, `totals.bloc
   "ips": [{ "ip": "198.51.100.23", "checks": 211, "invalid": 0, "downloads": 4, "licenses": 1, "blocked": false }]
 }
 ```
+
+## Tagged apps
+
+Each check result and download records its app and tag. App reports use that event context, so checking the child theme does not count as parent-theme traffic. A batch check records one result per app. The licence list and overview count fully valid licences when every app is valid; invalid includes any invalid app. Version adoption uses the version reported for that app attachment.

@@ -4,8 +4,8 @@
 
 <p align="center">
 A self-hosted licence manager that runs on Cloudflare Workers, D1 and R2.<br>
-License a product to many customers or a single project, give every licence a key and a check URL,<br>
-and control its status, its sites and its downloads from a dashboard or an API.
+Give each customer one licence key for multiple apps,<br>
+with independent statuses, shared or separate expiry dates, and app-owned releases.
 </p>
 
 <p align="center">
@@ -18,133 +18,88 @@ and control its status, its sites and its downloads from a dashboard or an API.
 
 ## Quick start
 
-1. **Deploy:** click **Deploy to Cloudflare** above. It creates the Worker, a D1 database named `<worker-name>-db`, an R2 bucket for files named `<worker-name>-files` and a Cron Trigger (every 10 minutes). If you install more than one copy in an account, give each Worker a different name. R2 has to be activated once in your Cloudflare account (it asks for a payment method, even for the free tier); without it everything works except the Files sections.
-2. **Sign in:** open your Worker's address. Until you add the admin login as runtime secrets, the login page shows what is missing and how to add it.
+1. **Deploy** with the button above. It provisions a Worker, D1, R2 and the scheduled task. Add `ADMIN_USERNAME`, a strong `ADMIN_PASSWORD`, and preferably `SESSION_SECRET` as runtime secrets. R2 must be activated on the account. See the [documentation site](https://github.com/momardia54/Warden-docs) for setup.
+2. **Create apps** for your products and custom projects: a parent theme, a customer's child theme, a plugin. Apps own statuses, release tracks, files and repository connections.
+3. **Create a licence** and attach the apps, each under a stable tag. Put the single generated key in the customer's site.
+4. **Check by tag** from the site. Publish releases on the apps and change each attachment's status as needed.
 
-   | Name | Type | Required |
-   |---|---|---|
-   | `ADMIN_USERNAME` | secret | yes |
-   | `ADMIN_PASSWORD` | secret (12+ characters) | yes |
-   | `SESSION_SECRET` | secret | recommended |
-   | `DB_SUFFIX` | *build* variable | optional (custom database name) |
+## One key, several apps
 
-3. **Issue a licence:** create an app (or skip it for a standalone licence), then a licence. Put the check URL in the customer's site. [docs/checking.md](docs/checking.md) has the code to do it.
+```text
+Harbor Studio website · one WRD-… key
+  parent-theme → Harbor Theme        → Active
+  child-theme  → Harbor Studio Child → Completed
+  booking      → Atlas Booking       → Active
+```
+
+Every attachment selects a status defined by its app. Completed can remain valid permanently while another app's Active status follows an expiry date. Choose **Shared expiry** for one date and renewal across all apps, or **Separate expiry** for independent dates and renewals. An empty date means no expiry. Grace uses a licence override, then an attachment override, then the app's live setting.
+
+**Licence templates** prefill tags and optional apps. For example, a WordPress template supplies `parent-theme` and `child-theme`, leaving the customer's child-theme app to select. Required slots must be filled; optional slots may be skipped. Updating a template leaves existing licences intact.
+
+Tags are unique within a licence and separate from Git version tags or release tracks. Keep them stable once the site uses them. [Apps and licences](docs/apps.md) explains the model.
 
 ## How it works
 
-1. You issue a licence in Warden, from the dashboard or the API, for a standalone project or under an app. Warden gives it a **licence key** and a **check URL**.
-2. The customer's site calls the check URL with its domain and its installed version (for example every 12 hours) and reads the response: `valid`, `status`, `message`, and whether an update is waiting.
-3. You change the licence status, or publish a new release, in the dashboard or by API. The next time the site checks, it sees the change and acts on it.
+```http
+GET /check/<key>?tag=parent-theme&domain=harborstudio.com&version=1.3.0&nonce=random_nonce
+```
 
-Warden **creates and manages** licences. **Enforcement lives in the site's code**, so you decide what an invalid licence does: show a notice, switch a feature off, show a maintenance page. [docs/checking.md](docs/checking.md) has PHP and JavaScript examples, including how to verify the signed response.
+```json
+{ "tag": "parent-theme", "app": { "id": "app_...", "slug": "harbor-theme", "name": "Harbor Theme" }, "valid": true, "status": "active", "message": "", "update": { "current": "1.3.0", "available": true, "latest": { "version": "1.4.0" } } }
+```
+
+The tag selects the app, its selected status determines its release track, and the channel determines which release is offered. Without a tag, a multi-app licence returns an `apps` array with separate results and no top-level validity or update. Batch checks can POST installed `versions` keyed by tag.
+
+Responses and release checksums are signed with the installation's Ed25519 key. Clients verify the raw response signature and its key, tag, app identity, domain and nonce. Check about every 12 hours and keep the last known result on network errors, rate limits or server errors.
+
+Warden manages licences and answers checks. **Enforcement lives in the customer's code.** See [checking.md](docs/checking.md) for PHP and JavaScript verification examples.
 
 ## Features
 
-- **Release tracks**: what each licence status receives, for example Updates for Active licences, the licence-free Final build for Completed ones and a maintenance version for Suspended ones. Each status belongs to one track, so a site is always offered the latest release of exactly one track; a licence can have its own track for a custom build ([docs/releases.md](docs/releases.md#tracks))
-- **Releases and updates**: upload a build with a version and every site that sends its version with its check is told an update is waiting, with the release notes, a SHA-256 checksum and a ready download link. Stable and beta channels, withdraw a bad release in one click, and see which version each site runs and how many are behind ([docs/releases.md](docs/releases.md))
-- **Publishing from GitHub**: connect GitHub once (Warden creates its own GitHub App in two clicks), pick a repository for a release track, and every version tag you push is downloaded as a zip, repacked with a fixed folder name and published as a release. Private repositories included, no token or webhook to copy; a token-and-webhook mode remains for single repositories ([docs/repositories.md](docs/repositories.md))
-- **Apps**: a product sold to many customers, with defaults for new licences (status, duration, maximum sites, message), its own licence list and releases shared by all of its licences ([docs/apps.md](docs/apps.md))
-- **Site limit**: a licence can be limited to N sites; sites register on their first check and you can release them
-- **Grace period**: an app, or a licence, can keep licences valid for some days after their expiry date, with a reminder in the check response, so a late renewal does not interrupt a site ([docs/statuses.md](docs/statuses.md#grace-period))
-- **Webhooks**: Warden calls your URLs when a licence is created, renewed, changes status, enters its grace period, expires, goes without a check for 3 days, or is deleted. Signed with the installation's key, retried for about a day, with a delivery log and a test button ([docs/webhooks.md](docs/webhooks.md))
-- Licence key (`WRD-XXXXX-XXXXX-XXXXX-XXXXX`) and a ready-to-use check URL per licence, with a customer name and email
-- **Configurable statuses** at app level and licence level: everything starts with a built-in set (pending, active, completed, suspended, disabled, expired). An app can customise its own, shared by all of its licences, and a standalone licence can customise its own. Each status says whether it is valid, what it becomes when the expiry date passes, its colour (any colour, with presets) and its message to sites ([docs/statuses.md](docs/statuses.md))
-- Optional expiry date, optional allowed domains (subdomains match), a public message returned to the site, internal notes
-- **Signed responses and releases**: every check and download answer is signed with the installation's Ed25519 key, and every release carries a signature of its checksum; sites verify with the public key alone ([docs/checking.md](docs/checking.md))
-- Activity log per licence: every check (which domain, which result) and every change
-- **Protection**: client IP address of every check and download, an IP blocklist (addresses and CIDR ranges), rate limits per IP address, licence key and API key, and blocking rules (invalid licence keys, invalid checks, licences per IP address, rate limit violations) with an allowlist, all configured in the dashboard ([docs/protection.md](docs/protection.md))
-- **Analytics**: valid and invalid checks per day, invalid checks by reason, active sites, downloads, and top licences, files and IP addresses, over 7, 30 or 90 days, for everything or one app ([docs/analytics.md](docs/analytics.md))
-- **Overview** with a *Needs attention* queue: licences expiring soon (extend them in one click) and valid licences with no recent check, plus apps with outdated sites
-- **Quick search** (Ctrl+K or Cmd+K) across licences, customers, keys, site domains and apps
-- **Licence list** with saved views in the address (valid, invalid, expiring, no recent check), filters, sorting and **CSV export**
-- **Files per licence** (stored in R2), each with a release rule: the licence statuses in which it can be downloaded. Use it to ship updates while a licence is valid, to release a final build when the client has paid in full, or to serve a notice while a licence is suspended ([docs/files.md](docs/files.md))
-- **Extend expiry** in one click (+30 days, +90 days, +1 year) and **regenerate key**
-- **API** with scoped keys, idempotent create, renew, status, search and paging, plus an OpenAPI description
-- Single admin login from Worker secrets, no third-party services, runs on the Workers and D1 free plans
-
-| | |
-|---|---|
-| ![Apps](docs/screenshots/apps.jpg) | ![App page](docs/screenshots/app.jpg) |
-| Apps with licence counts, valid licences, sites and outdated sites | An app: licences, sites, latest release and checks of the last 30 days |
-| ![Releases](docs/screenshots/releases.jpg) | ![Edit a release](docs/screenshots/edit-file.jpg) |
-| Release tracks of an app, each serving a set of licence statuses | Editing a release: version, channel, release notes and track |
-| ![Licences](docs/screenshots/licences.jpg) | ![Licence page](docs/screenshots/licence.jpg) |
-| Licences of all apps, with views, filters and sorting | A licence: check result, expiry, sites and last check |
-| ![Sites](docs/screenshots/sites-and-files.jpg) | ![Analytics](docs/screenshots/analytics.jpg) |
-| Registered sites, the version each one runs and its address | Analytics: valid and invalid checks per day |
-| ![App statuses](docs/screenshots/app-statuses.jpg) | ![Edit a status](docs/screenshots/edit-status.jpg) |
-| An app with its own statuses | Editing a status: colour, expiry rule, valid status and message |
-| ![Protection](docs/screenshots/protection.jpg) | ![Integrations](docs/screenshots/integrations.jpg) |
-| Protection: blocking rules with threshold, time window and block duration | Integrations: connecting GitHub |
-| ![Creating an app](docs/screenshots/new-app.jpg) | ![New licence under an app](docs/screenshots/new-licence.jpg) |
-| Creating an app with defaults for new licences | Issuing a licence with the app's defaults |
-| ![Licence statuses](docs/screenshots/licence-statuses.jpg) | ![API keys](docs/screenshots/api.jpg) |
-| A standalone licence: default statuses, customisable | API keys with their scope |
-
-## The check URL
-
-```
-GET https://<your-worker>/check/<licence key>?domain=client-site.org
-```
-
-```json
-{ "name": "Harbor Studio website", "valid": true, "status": "active", "message": "", "expires_at": "2027-03-31T23:59:59.999Z", "checked_at": "2026-10-04T16:17:30.248Z" }
-```
-
-`valid` is `true` only when the licence's status is valid (by default Active and Completed), its expiry rule has not triggered, and the domain is allowed. `status` is the licence's status key, or `domain_mismatch`, `site_limit_reached` or `unknown` (HTTP 404). Full details and verification code: [docs/checking.md](docs/checking.md).
-
-Recommended in the site: check about every 12 hours, act only on a response you could read and verify, and **keep the last known state on network errors or 5xx**, so a Warden outage never locks a client out.
+- Multiple apps under one licence key, with independent statuses and shared domain/site limits. Parent and child themes on one domain consume one slot.
+- Shared or separate expiry dates, per-app renewals, grace periods, permanent Completed access, customer details and internal notes.
+- Licence templates with stable tags, required/optional slots and optional default apps.
+- App-owned release tracks, stable/beta channels, release notes, SHA-256 checksums, withdrawal and restoration. Reported versions are stored per tag and domain.
+- Publishing from GitHub through a GitHub App or a token and webhook. Imports stream large archives through R2 and resume after interruptions.
+- Scoped REST API keys, CSV exports with one row per attachment, traffic analytics, an IP blocklist, rate limits and blocking rules.
+- Signed outgoing webhooks for licence changes, renewals, expiry, grace and missing checks, with app/tag context and retries.
+- Dashboard search, light/dark themes, configurable app status definitions and colour choices.
 
 ## Files and releases
 
-Attach files to a licence or an app in the dashboard or by API. A file with a version is a **release**, offered to sites as an update ([docs/releases.md](docs/releases.md)).
+Upload files and configure tracks on **Apps → app → Releases**. A versioned file is a release; an unversioned file is an attachment. An attachment on a licence receives the release permitted by its app's selected status. Custom projects use apps too.
 
-```
-GET https://<your-worker>/check/<licence key>?domain=client-site.org&version=1.3.0
-```
-
-```json
-{ "valid": true, "status": "active", "update": { "current": "1.3.0", "available": true, "latest": { "version": "1.4.0", "changelog": "Faster gallery.", "sha256": "9f86d0...", "download_url": "https://<your-worker>/download/WRD-.../fil_...?domain=client-site.org" } } }
+```http
+GET /download/<key>?tag=child-theme&domain=harborstudio.com
+GET /download/<key>/<file-id>?tag=child-theme&domain=harborstudio.com
 ```
 
-Every file, release or not, has a **release rule**: the licence statuses in which it can be downloaded, and whether the site's domain must match.
+The tag scopes both listing and direct download authorization. Listed URLs carry the tag; append `&domain=...` when needed. Update URLs returned by checks already include the domain. See [files.md](docs/files.md) and [releases.md](docs/releases.md).
 
-| Example | Statuses | Domain check |
-|---|---|---|
-| Updates for a licensed site | active, completed | on |
-| Final release after full payment | completed | off |
-| Maintenance or renewal notice | suspended | off |
-
-```
-GET https://<your-worker>/download/<licence key>                         # status and files, with availability
-GET https://<your-worker>/download/<licence key>/<file id>?domain=site   # the file, or a JSON error (HTTP 403)
-```
-
-When the last payment of a project arrives, set the licence to **Completed**: it stays valid permanently and a file released in Completed becomes available. Every download and denied download is logged. Details and examples: [docs/files.md](docs/files.md).
+Deleting a licence preserves apps and releases. Regenerating its key affects all attached apps. Migration 0016 preserves existing keys, file ids, package checksums, R2 objects and old download links, and converts standalone projects to apps. Read [upgrade-notes.md](docs/upgrade-notes.md) before upgrading management integrations.
 
 ## The API
 
-Create a key on the **API** page of the dashboard and send it as `Authorization: Bearer wk_...`.
-
 ```bash
-# create a licence (safe to retry: the same external_ref returns the first one)
 curl -X POST https://<worker>/api/v1/licenses \
   -H "Authorization: Bearer $WARDEN_KEY" -H "Content-Type: application/json" \
-  -d '{"name":"Harbor Studio website","domains":["harborstudio.com"],"duration_days":365,"external_ref":"order-1042"}'
+  -d '{"name":"Harbor Studio website","expiry_mode":"shared","expires_at":"2027-11-03","external_ref":"order-1042","apps":[{"tag":"parent-theme","app":"harbor-theme"},{"tag":"child-theme","app":"harbor-studio-child","status":"completed"}]}'
 
-# renew by 30 days, suspend, list what has expired
-curl -X POST   https://<worker>/api/v1/licenses/<id or key>/renew  -H "Authorization: Bearer $WARDEN_KEY" -d '{"days":30}'
-curl -X POST   https://<worker>/api/v1/licenses/<id or key>/status -H "Authorization: Bearer $WARDEN_KEY" -d '{"status":"suspended"}'
-curl           "https://<worker>/api/v1/licenses?status=expired"   -H "Authorization: Bearer $WARDEN_KEY"
+curl -X POST https://<worker>/api/v1/licenses/<id>/status \
+  -H "Authorization: Bearer $WARDEN_KEY" -H "Content-Type: application/json" \
+  -d '{"tag":"parent-theme","status":"suspended"}'
 ```
 
-| Scope | Allows |
-|---|---|
-| `read` | list, read, stats, activity |
-| `manage` | also create, edit, set status, renew |
-| `full` | also delete and regenerate keys |
+`external_ref` makes creation idempotent. Read/manage/full API scopes control access. Shared renewal omits a tag; separate renewal requires one. Templates are managed at `/api/v1/license-templates`. See [api.md](docs/api.md) or your installation's `/api/v1/openapi.json`.
 
-Endpoints: `GET /apps/{app}/versions`, `GET /me`, `GET /stats`, `GET /signing-key`, `GET|POST /webhooks`, `GET|PATCH|DELETE /webhooks/{id}` (with `/test` and `/deliveries`), `GET /statuses`, `GET|POST|DELETE /apps/{app}/statuses` and `/licenses/{id}/statuses`, `GET|POST /licenses`, `GET|PATCH|DELETE /licenses/{id}`, `POST /licenses/{id}/status`, `/renew`, `/regenerate-key`, `GET /licenses/{id}/activity`, `GET /licenses/{id}/activations`, `DELETE /licenses/{id}/activations/{domain}`, `GET|PUT /licenses/{id}/files`, `PATCH|DELETE /licenses/{id}/files/{fileId}`, `GET|POST /apps`, `GET|PATCH|DELETE /apps/{app}`, `GET|POST /apps/{app}/licenses`, `GET|PUT /apps/{app}/files`, `PATCH|DELETE /apps/{app}/files/{fileId}`, `GET|POST /apps/{app}/tracks` and `/licenses/{id}/tracks`, `GET|PATCH|DELETE .../tracks/{track}`, `GET|PUT|DELETE .../tracks/{track}/source` (with `/imports`), `GET /integrations/github` (with `/repositories`). Reference: [docs/api.md](docs/api.md), or `/api/v1/openapi.json` on your own install.
+## Local review
+
+```bash
+export PATH=/opt/homebrew/opt/node@22/bin:$PATH
+npm run review
+```
+
+This starts `http://127.0.0.1:5180`, seeds demonstration apps, sample release archives, a WordPress template and licences using both expiry modes. It prints a temporary local admin password; credentials stay in process memory. Keep the terminal open and sign in with those credentials. Sample archives contain a README, not an installable theme or plugin. No Cloudflare deployment is performed. Remove or move an existing `.dev.vars` first, because it can override process environment credentials.
 
 ## Run and deploy
 

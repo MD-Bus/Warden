@@ -10,6 +10,7 @@ export async function action({ request, context, params }: Route.ActionArgs) {
   if (request.method !== "PUT") return Response.json({ error: "Use PUT" }, { status: 405 })
   const license = await getLicense(env, params.licenseId)
   if (!license) return Response.json({ error: "Licence not found" }, { status: 404 })
+  if (license.expiry_mode && license.expiry_mode !== "legacy") return Response.json({ error: "Manage files on the attached app." }, { status: 409 })
   const q = new URL(request.url).searchParams
   const stored = await storeFile(env, { license }, {
     name: q.get("name") ?? "",

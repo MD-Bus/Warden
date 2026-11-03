@@ -1,3 +1,5 @@
+import type { AttachmentFacts } from "../lib/entitlements"
+import { attachmentContext, listAttachments, scanBundleEvents } from "./entitlements.server"
 import { generateLicenseKey, normalizeDomain, parseDomains } from "../lib/license"
 import { defaultStatusKey, effectiveStatusKey, expirySources, findStatus, graceEndsAt, MAX_GRACE_DAYS, statusLabel, type StatusSet } from "../lib/statuses"
 import { deleteLicenseFiles } from "./files.server"
@@ -8,6 +10,10 @@ import { newId } from "./util.server"
 
 export type License = {
   id: string
+  apps?: AttachmentFacts[]
+  expiry_mode?: "legacy" | "shared" | "separate"
+  attachment_id?: string
+  tag?: string
   name: string
   customer_name: string
   customer_email: string
@@ -41,7 +47,7 @@ export type License = {
   sites_used?: number
 }
 
-export type Activity = { id: number; at: number; event: "check" | "change" | "download"; status: string | null; domain: string | null; detail: string; /** Caller of a check or a download. */ ip: string | null }
+export type Activity = { app_id?: string | null; tag?: string | null; id: number; at: number; event: "check" | "change" | "download"; status: string | null; domain: string | null; detail: string; /** Caller of a check or a download. */ ip: string | null }
 
 export type Activation = {
   domain: string
@@ -197,21 +203,21 @@ export async function queryLicenses(env: Env, filters: LicenseFilters, now = Dat
   if (search) {
     const like = `%${search.replace(/[%_\\]/g, "\\$&")}%`
     const columns = ["l.name", "l.customer_name", "l.customer_email", "l.license_key", "l.domains", "l.external_ref", "a.name"]
-    where.push(`(${columns.map((c) => `${c} LIKE ? ESCAPE '\\'`).join(" OR ")})`)
-    args.push(...columns.map(() => like))
+    where.push(`(${columns.map((c) => `${c} LIKE ? ESCAPE '\\'`).join(" OR ")} OR EXISTS (SELECT 1 FROM license_apps e JOIN apps ap ON ap.id=e.app_id WHERE e.license_id=l.id AND (ap.name LIKE ? ESCAPE '\\' OR e.tag LIKE ? ESCAPE '\\')))`)
+    args.push(...columns.map(() => like),like,like)
   }
   if (filters.externalRef) {
     where.push("l.external_ref = ?")
     args.push(filters.externalRef)
   }
   if (filters.appId) {
-    where.push("l.app_id = ?")
-    args.push(filters.appId)
+    where.push("(l.app_id = ? OR EXISTS (SELECT 1 FROM license_apps e WHERE e.license_id = l.id AND e.app_id = ?))")
+    args.push(filters.appId, filters.appId)
   }
   const page = async (before: string | undefined, limit: number) => {
     const conditions = before ? [...where, "l.id < ?"] : where
     const sql = `${SELECT_LICENSES} ${conditions.length ? `WHERE ${conditions.join(" AND ")}` : ""} ORDER BY l.id DESC LIMIT ?`
-    return (await env.DB.prepare(sql).bind(...args, ...(before ? [before] : []), limit).all<License>()).results
+    return hydrateLicenses(env, (await env.DB.prepare(sql).bind(...args, ...(before ? [before] : []), limit).all<License>()).results, now)
   }
 
   if (!filters.status) return page(filters.before, filters.limit)
@@ -222,7 +228,7 @@ export async function queryLicenses(env: Env, filters: LicenseFilters, now = Dat
   while (matches.length < filters.limit) {
     const batch = await page(before, STATUS_SCAN_BATCH)
     for (const license of batch) {
-      if (effectiveStatusKey(license, setForLicense(sets, license), now) !== filters.status) continue
+      if (license.apps?.length ? !license.apps.some((e) => e.effective_status === filters.status && (!filters.appId || e.app_id === filters.appId)) : effectiveStatusKey(license, setForLicense(sets, license), now) !== filters.status) continue
       matches.push(license)
       if (matches.length === filters.limit) break
     }
@@ -230,6 +236,17 @@ export async function queryLicenses(env: Env, filters: LicenseFilters, now = Dat
     before = batch[batch.length - 1].id
   }
   return matches
+}
+
+export async function hydrateLicenses(env: Env, licenses: License[], now=Date.now()): Promise<License[]> {
+  if (!licenses.length) return licenses
+  const [sets, rows] = await Promise.all([loadStatusSets(env),env.DB.prepare(`SELECT e.*, a.name AS app_name,a.slug AS app_slug,a.grace_days AS app_grace_days FROM license_apps e JOIN apps a ON a.id=e.app_id WHERE e.license_id IN (SELECT value FROM json_each(?)) ORDER BY e.position`).bind(JSON.stringify(licenses.map((l) => l.id))).all<import("./entitlements.server").Attachment>()])
+  return licenses.map((l) => ({...l,apps:rows.results.filter((e) => e.license_id === l.id).map((e) => {
+    const c=attachmentContext(l,e), set=sets.byApp[e.app_id] ?? []
+    const actual=set.length ? set : setForLicense(sets,{id:l.id,app_id:e.app_id})
+    const status=effectiveStatusKey(c,actual,now)
+    return {tag:e.tag,app_id:e.app_id,app_name:e.app_name,app_slug:e.app_slug,status:e.status,effective_status:status,valid:inView(c,actual,"valid",now),expires_at:c.expires_at,grace_ends_at:graceEndsAt(c,actual,now),last_check_at:e.last_check_at,created_at:l.created_at,expiring:inView(c,actual,"expiring",now),silent:inView(c,actual,"silent",now)}
+  })}))
 }
 
 function logChange(env: Env, id: string, at: number, status: string | null, detail: string) {
@@ -341,6 +358,7 @@ export async function deleteLicense(env: Env, id: string): Promise<void> {
   if (license) await emitLicenseEvent(env, "license.deleted", license)
   await deleteLicenseFiles(env, id)
   await env.DB.batch([
+    env.DB.prepare("DELETE FROM license_apps WHERE license_id = ?").bind(id),
     env.DB.prepare("DELETE FROM files WHERE license_id = ?").bind(id),
     env.DB.prepare("DELETE FROM source_imports WHERE source_id IN (SELECT id FROM release_sources WHERE license_id = ?)").bind(id),
     env.DB.prepare("DELETE FROM release_sources WHERE license_id = ?").bind(id),
@@ -384,6 +402,7 @@ export async function releaseActivation(env: Env, license: License, domain: stri
   const now = Date.now()
   const res = await env.DB.prepare("DELETE FROM activations WHERE license_id = ? AND domain = ?").bind(license.id, domain).run()
   if (res.meta.changes === 0) return false
+  await env.DB.prepare("DELETE FROM activation_versions WHERE domain = ? AND attachment_id IN (SELECT id FROM license_apps WHERE license_id = ?)").bind(domain, license.id).run()
   await logChange(env, license.id, now, license.status, `Site released: ${domain}`).run()
   return true
 }
@@ -393,10 +412,10 @@ export async function releaseActivation(env: Env, license: License, domain: stri
 /** A licence's activity, newest first. `after` continues a list after that entry (its `at` and `id`). */
 export async function recentActivity(env: Env, id: string, limit = 50, after?: { at: number; id: number }): Promise<Activity[]> {
   const res = after
-    ? await env.DB.prepare("SELECT id, at, event, status, domain, detail, ip FROM activity WHERE license_id = ? AND (at < ? OR (at = ? AND id < ?)) ORDER BY at DESC, id DESC LIMIT ?")
+    ? await env.DB.prepare("SELECT id, at, event, status, domain, detail, ip, app_id, tag FROM activity WHERE license_id = ? AND (at < ? OR (at = ? AND id < ?)) ORDER BY at DESC, id DESC LIMIT ?")
         .bind(id, after.at, after.at, after.id, limit)
         .all<Activity>()
-    : await env.DB.prepare("SELECT id, at, event, status, domain, detail, ip FROM activity WHERE license_id = ? ORDER BY at DESC, id DESC LIMIT ?").bind(id, limit).all<Activity>()
+    : await env.DB.prepare("SELECT id, at, event, status, domain, detail, ip, app_id, tag FROM activity WHERE license_id = ? ORDER BY at DESC, id DESC LIMIT ?").bind(id, limit).all<Activity>()
   return res.results
 }
 
@@ -416,22 +435,23 @@ export type OverviewStats = {
 export async function overviewStats(env: Env, now = Date.now()): Promise<OverviewStats> {
   const [sets, { results: rows }] = await Promise.all([
     loadStatusSets(env),
-    env.DB.prepare("SELECT l.id, l.status, l.expires_at, l.last_check_at, l.created_at, l.app_id, l.grace_days, a.grace_days AS app_grace_days FROM licenses l LEFT JOIN apps a ON a.id = l.app_id").all<
+    env.DB.prepare("SELECT l.id, l.expiry_mode, l.status, l.expires_at, l.last_check_at, l.created_at, l.app_id, l.grace_days, a.grace_days AS app_grace_days FROM licenses l LEFT JOIN apps a ON a.id = l.app_id").all<
       Pick<License, "id" | "status" | "expires_at" | "last_check_at" | "created_at" | "app_id" | "grace_days" | "app_grace_days">
     >(),
   ])
+  const hydrated = await hydrateLicenses(env, rows as License[], now)
   const stats: OverviewStats = { total: rows.length, valid: 0, invalid: 0, endingSoon: 0, silent: 0, byStatus: {} }
-  for (const row of rows) {
+  for (const row of hydrated) {
     const set = setForLicense(sets, row)
     const effective = effectiveStatusKey(row, set, now)
-    stats.byStatus[effective] = (stats.byStatus[effective] ?? 0) + 1
+    for (const status of row.apps?.length ? row.apps.map((e) => e.effective_status) : [effective]) stats.byStatus[status] = (stats.byStatus[status] ?? 0) + 1
+    if (inView(row, set, "expiring", now)) stats.endingSoon++
+    if (inView(row, set, "silent", now)) stats.silent++
     if (!inView(row, set, "valid", now)) {
       stats.invalid++
       continue
     }
     stats.valid++
-    if (inView(row, set, "expiring", now)) stats.endingSoon++
-    if (inView(row, set, "silent", now)) stats.silent++
   }
   return stats
 }
@@ -440,10 +460,11 @@ export async function overviewStats(env: Env, now = Date.now()): Promise<Overvie
 export async function attentionLists(env: Env, limit = 8, now = Date.now()): Promise<{ expiring: License[]; silent: License[] }> {
   const [sets, { results: rows }] = await Promise.all([
     loadStatusSets(env),
-    env.DB.prepare(`${SELECT_LICENSES} WHERE l.expires_at IS NOT NULL OR l.last_check_at IS NULL OR l.last_check_at < ?`).bind(now - SILENT_AFTER_DAYS * 86_400_000).all<License>(),
+    env.DB.prepare(`${SELECT_LICENSES} WHERE l.expires_at IS NOT NULL OR l.expiry_mode = 'separate' OR l.last_check_at IS NULL OR l.last_check_at < ?`).bind(now - SILENT_AFTER_DAYS * 86_400_000).all<License>(),
   ])
-  const expiring = rows.filter((l) => inView(l, setForLicense(sets, l), "expiring", now)).sort((a, b) => (a.expires_at ?? 0) - (b.expires_at ?? 0))
-  const silent = rows.filter((l) => inView(l, setForLicense(sets, l), "silent", now)).sort((a, b) => (a.last_check_at ?? a.created_at) - (b.last_check_at ?? b.created_at))
+  const hydrated = await hydrateLicenses(env, rows, now)
+  const expiring = hydrated.filter((l) => inView(l, setForLicense(sets, l), "expiring", now)).sort((a, b) => (a.expires_at ?? 0) - (b.expires_at ?? 0))
+  const silent = hydrated.filter((l) => inView(l, setForLicense(sets, l), "silent", now)).sort((a, b) => (a.last_check_at ?? a.created_at) - (b.last_check_at ?? b.created_at))
   return { expiring: expiring.slice(0, limit), silent: silent.slice(0, limit) }
 }
 
@@ -453,14 +474,14 @@ export type RecentEvent = { id: number; at: number; event: Activity["event"]; st
 export async function recentEvents(env: Env, limit = 15, event?: Activity["event"]): Promise<RecentEvent[]> {
   const where = event ? "WHERE a.event = ?" : ""
   const res = await env.DB.prepare(
-    `SELECT a.id, a.at, a.event, a.status, a.domain, a.detail, a.ip, l.id AS license_id, l.name, l.app_id FROM activity a JOIN licenses l ON l.id = a.license_id ${where} ORDER BY a.at DESC, a.id DESC LIMIT ?`
+    `SELECT a.id, a.at, a.event, a.status, a.domain, a.detail, a.ip, l.id AS license_id, l.name, COALESCE(a.app_id,l.app_id) AS app_id FROM activity a JOIN licenses l ON l.id = a.license_id ${where} ORDER BY a.at DESC, a.id DESC LIMIT ?`
   )
     .bind(...(event ? [event, limit] : [limit]))
     .all<RecentEvent>()
   return res.results
 }
 
-export type SearchHit = { id: string; name: string; customer_name: string; license_key: string; app_name: string | null; status: string; expires_at: number | null; app_id: string | null; matched_site: string | null }
+export type SearchHit = { apps?: AttachmentFacts[]; id: string; name: string; customer_name: string; license_key: string; app_name: string | null; status: string; expires_at: number | null; app_id: string | null; matched_site: string | null }
 
 /**
  * Finds licences by name, customer, email, key, allowed domains, external reference or app name, and also by the
@@ -474,12 +495,12 @@ export async function searchLicenses(env: Env, query: string, limit = 8): Promis
   const bySite = (
     await env.DB.prepare(`SELECT license_id, domain FROM activations WHERE domain LIKE ? ESCAPE '\\' OR last_ip LIKE ? ESCAPE '\\' ORDER BY last_seen_at DESC LIMIT ?`).bind(like, like, limit).all<{ license_id: string; domain: string }>()
   ).results
-  const hits: SearchHit[] = byFields.map((l) => ({ id: l.id, name: l.name, customer_name: l.customer_name, license_key: l.license_key, app_name: l.app_name ?? null, status: l.status, expires_at: l.expires_at, app_id: l.app_id, matched_site: null }))
+  const hits: SearchHit[] = byFields.map((l) => ({ id: l.id, apps:l.apps, name: l.name, customer_name: l.customer_name, license_key: l.license_key, app_name: l.app_name ?? null, status: l.status, expires_at: l.expires_at, app_id: l.app_id, matched_site: null }))
   for (const site of bySite) {
     if (hits.length >= limit) break
     if (hits.some((h) => h.id === site.license_id)) continue
     const l = await getLicense(env, site.license_id)
-    if (l) hits.push({ id: l.id, name: l.name, customer_name: l.customer_name, license_key: l.license_key, app_name: l.app_name ?? null, status: l.status, expires_at: l.expires_at, app_id: l.app_id, matched_site: site.domain })
+    if (l) hits.push({ id: l.id, apps:l.apps, name: l.name, customer_name: l.customer_name, license_key: l.license_key, app_name: l.app_name ?? null, status: l.status, expires_at: l.expires_at, app_id: l.app_id, matched_site: site.domain })
   }
   return hits
 }
@@ -505,13 +526,13 @@ export async function pruneActivity(env: Env, now = Date.now()): Promise<void> {
 export async function scanLicenseEvents(env: Env, now = Date.now(), limit = 500): Promise<number> {
   const sets = await loadStatusSets(env)
   const marks: D1PreparedStatement[] = []
-  let events = 0
+  let events = await scanBundleEvents(env,now,limit)
 
   const expired = (
     await env.DB.prepare(
       // Only licences with an event due: the grace event not sent yet, or the expiry event once the grace period is
       // over. A licence in its grace period, already reported, is not read again until then.
-      `${SELECT_LICENSES} WHERE l.expires_at IS NOT NULL AND l.expires_at <= ? AND (l.grace_notified_for IS NOT l.expires_at
+      `${SELECT_LICENSES} WHERE l.expiry_mode = 'legacy' AND l.expires_at IS NOT NULL AND l.expires_at <= ? AND (l.grace_notified_for IS NOT l.expires_at
          OR (l.expired_notified_for IS NOT l.expires_at AND l.expires_at + COALESCE(l.grace_days, a.grace_days, 0) * 86400000 <= ?)) ORDER BY l.expires_at LIMIT ?`,
     )
       .bind(now, now, limit)
@@ -545,7 +566,7 @@ export async function scanLicenseEvents(env: Env, now = Date.now(), limit = 500)
   const quietSince = now - SILENT_AFTER_DAYS * 86_400_000
   const silent = (
     await env.DB.prepare(
-      `${SELECT_LICENSES} WHERE COALESCE(l.last_check_at, l.created_at) < ? AND l.silent_notified_for IS NOT COALESCE(l.last_check_at, l.created_at) ORDER BY COALESCE(l.last_check_at, l.created_at) LIMIT ?`,
+      `${SELECT_LICENSES} WHERE l.expiry_mode = 'legacy' AND COALESCE(l.last_check_at, l.created_at) < ? AND l.silent_notified_for IS NOT COALESCE(l.last_check_at, l.created_at) ORDER BY COALESCE(l.last_check_at, l.created_at) LIMIT ?`,
     )
       .bind(quietSince, limit)
       .all<License>()

@@ -1,3 +1,4 @@
+import { getTemplate, listTemplates, saveTemplate, saveBundle, serializeBundle, renewBundle, listAttachments } from "./entitlements.server"
 import { KEY_PATTERN } from "../lib/license"
 import { DEFAULT_STATUSES, defaultStatusKey, findStatus, type StatusSet } from "../lib/statuses"
 import { applyAppBody, applyLicenseBody } from "./api-input.server"
@@ -29,6 +30,10 @@ import {
   createStatus, customizeStatuses, deleteStatus, getStatusSetForApp, getStatusSetForLicense, hasCustomSet, loadStatusSets, readStatusInput, resetStatuses, setForLicense,
   setStatusOrder, statusSource, updateStatus, type StatusInput, type StatusScope,
 } from "./statuses.server"
+
+async function serializeManagedLicense(env: Env, l: License, origin: string, set: StatusSet) {
+  return l.expiry_mode && l.expiry_mode !== "legacy" ? serializeBundle(env,l,origin) : serializeLicense(l,origin,set)
+}
 
 type Context = { env: Env; request: Request; url: URL; origin: string; key: ApiKeyRow; execution: ExecutionContext }
 
@@ -90,7 +95,7 @@ async function listLicensesResponse(ctx: Context, appId?: string): Promise<Respo
   }
   const rows = await queryLicenses(ctx.env, { status, q: q.get("q") ?? undefined, externalRef: q.get("external_ref") ?? undefined, appId: filterApp, before: cursor, limit: limit + 1 })
   const page = rows.slice(0, limit)
-  return reply({ data: page.map((l) => serializeLicense(l, ctx.origin, setForLicense(sets, l))), next: rows.length > limit ? page[page.length - 1].id : null })
+  return reply({ data: await Promise.all(page.map((l) => serializeManagedLicense(ctx.env, l, ctx.origin, setForLicense(sets, l)))), next: rows.length > limit ? page[page.length - 1].id : null })
 }
 
 /** Creates a licence from a JSON body. Under an app, the app's defaults apply to every field the body leaves out. */
@@ -100,11 +105,17 @@ async function createLicenseResponse(ctx: Context, forcedApp?: App): Promise<Res
   const body = await readJson(ctx.request)
   if (body instanceof Response) return body
 
+  if ("apps" in body || "template" in body || "expiry_mode" in body) {
+    if (forcedApp) return fail(422,"invalid_apps","Create a multi-app licence with POST /licenses.")
+    const saved=await saveBundle(ctx.env,body,null)
+    return "response" in saved ? saved.response : reply(await serializeBundle(ctx.env,saved.license,ctx.origin),saved.replayed ? 200 : 201,saved.replayed ? {"idempotent-replayed":"true"} : {})
+  }
+
   const ref = body.external_ref === undefined || body.external_ref === null ? null : trimmed(body.external_ref, 120)
   if (body.external_ref !== undefined && body.external_ref !== null && !ref) return fail(422, "invalid_external_ref", "external_ref must be a non-empty string of at most 120 characters.")
   if (ref) {
     const existing = await getLicenseByRef(ctx.env, ref)
-    if (existing) return reply(serializeLicense(existing, ctx.origin, await getStatusSetForLicense(ctx.env, existing)), 200, { "idempotent-replayed": "true" })
+    if (existing) return reply(await serializeManagedLicense(ctx.env,existing,ctx.origin,await getStatusSetForLicense(ctx.env, existing)), 200, { "idempotent-replayed": "true" })
   }
   if (!("name" in body)) return fail(422, "invalid_name", "name is required.")
 
@@ -141,12 +152,16 @@ async function licenseRoute(ctx: Context, segments: string[]): Promise<Response>
   const extra = rest[0]
 
   if (!sub) {
-    if (method === "GET") return reply(serializeLicense(license, origin, set))
+    if (method === "GET") return reply(await serializeManagedLicense(env,license,origin,set))
     if (method === "PATCH") {
       const denied = need(ctx, "manage")
       if (denied) return denied
       const body = await readJson(request)
       if (body instanceof Response) return body
+      if (license.expiry_mode !== "legacy" || "apps" in body || "expiry_mode" in body) {
+        const saved=await saveBundle(env,body,license)
+        return "response" in saved ? saved.response : reply(await serializeBundle(env,saved.license,origin))
+      }
       const app = await resolveAppField(env, body)
       if (app instanceof Response) return app
       const targetApp = app === undefined ? license.app_id : (app?.id ?? null)
@@ -168,6 +183,18 @@ async function licenseRoute(ctx: Context, segments: string[]): Promise<Response>
     return fail(405, "method_not_allowed", "Use GET, PATCH or DELETE.")
   }
 
+  if (license.expiry_mode && license.expiry_mode !== "legacy" && ["files","tracks","statuses"].includes(sub)) {
+    if (method !== "GET") return fail(409,"app_owned","Manage files, release tracks and status definitions on the app.")
+    const tag=ctx.url.searchParams.get("tag")
+    const attachments=await listAttachments(env,license.id)
+    if (tag === null && attachments.length !== 1) return fail(422,"tag_required","Send tag to select the app.")
+    const attachment=tag === null ? attachments[0] : attachments.find((e) => e.tag === tag)
+    if (!attachment) return fail(404,"attachment_not_found","No app has that tag.")
+    const app=(await findApp(env,attachment.app_id))!
+    if (sub === "files") return filesRoute(ctx,{app},extra)
+    if (sub === "tracks") return tracksRoute(ctx,{app},rest)
+    return statusRoute(ctx,{app:app.id},await getStatusSetForApp(env,app.id),rest)
+  }
   if (sub === "files") return filesRoute(ctx, { license }, extra)
   if (sub === "tracks") return tracksRoute(ctx, { license }, rest)
   if (sub === "statuses") {
@@ -194,7 +221,9 @@ async function licenseRoute(ctx: Context, segments: string[]): Promise<Response>
   if (sub === "activations") {
     if (method === "GET" && !extra) {
       const page = pageOf(await listActivations(env, license.id), (a) => a.domain, ctx.url.searchParams)
-      return page instanceof Response ? page : reply({ max_sites: license.max_sites, data: page.data.map(serializeActivation), next: page.next })
+      if(page instanceof Response) return page
+      const versions=(await env.DB.prepare("SELECT v.domain,v.version,e.tag FROM activation_versions v JOIN license_apps e ON e.id=v.attachment_id WHERE e.license_id=?").bind(license.id).all<{domain:string;version:string|null;tag:string}>()).results
+      return reply({max_sites:license.max_sites,data:page.data.map((a) => ({...serializeActivation(a),...(license.expiry_mode !== "legacy" ? {versions:Object.fromEntries(versions.filter((v) => v.domain === a.domain).map((v) => [v.tag,v.version]))} : {})})),next:page.next})
     }
     if (method === "DELETE" && extra) {
       const denied = need(ctx, "manage")
@@ -217,6 +246,19 @@ async function licenseRoute(ctx: Context, segments: string[]): Promise<Response>
     const body = await readJson(request)
     if (body instanceof Response) return body
 
+    if (license.expiry_mode && license.expiry_mode !== "legacy" && sub !== "regenerate-key") {
+      if (sub === "renew") {
+        const error=await renewBundle(env,license,body)
+        return error ?? reply(await serializeBundle(env,(await getLicense(env,license.id))!,origin))
+      }
+      if (typeof body.status !== "string") return fail(422,"invalid_status","Send status as a string.")
+      if (typeof body.tag !== "string") return fail(422,"tag_required","Send the tag of the app whose status should change.")
+      const attachments=await listAttachments(env,license.id)
+      if (!attachments.some((e) => e.tag === body.tag)) return fail(404,"attachment_not_found","No app has that tag.")
+      const apps=attachments.map((e) => ({tag:e.tag,app:e.app_id,status:e.tag === body.tag ? body.status : e.status,expires_at:iso(e.expires_at),grace_days:e.grace_days,message:e.message}))
+      const saved=await saveBundle(env,{apps},license)
+      return "response" in saved ? saved.response : reply(await serializeBundle(env,saved.license,origin))
+    }
     if (sub === "status") {
       if (typeof body.status !== "string" || !findStatus(set, body.status)) return fail(422, "invalid_status", `status must be one of: ${set.map((s) => s.key).join(", ")}.`)
       await setStatus(env, license, body.status)
@@ -233,7 +275,7 @@ async function licenseRoute(ctx: Context, segments: string[]): Promise<Response>
     } else {
       await regenerateKey(env, license)
     }
-    return reply(serializeLicense((await getLicense(env, license.id))!, origin, set))
+    return reply(await serializeManagedLicense(env,(await getLicense(env,license.id))!,origin,set))
   }
   return unknownEndpoint()
 }
@@ -783,6 +825,26 @@ export async function handleApi(request: Request, env: Env, execution: Execution
     }
   }
   if (resource === "webhooks") return webhookRoute(ctx, rest)
+  if (resource === "license-templates") {
+    const template=rest[0] ? await getTemplate(env,rest[0]) : null
+    if (rest.length>1) return unknownEndpoint()
+    if (rest[0] && !template) return fail(404,"template_not_found","No template has that id.")
+    if (request.method === "GET") {
+      if(template) return reply(template)
+      const page=pageOf(await listTemplates(env),(t) => t.id,url.searchParams)
+      return page instanceof Response ? page : reply(page)
+    }
+    const denied=need(ctx,request.method === "DELETE" ? "full" : "manage")
+    if (denied) return denied
+    if (request.method === "DELETE" && template) { await env.DB.prepare("DELETE FROM license_templates WHERE id=?").bind(template.id).run(); return reply({deleted:true,id:template.id}) }
+    if ((request.method === "POST" && !rest[0]) || (request.method === "PATCH" && template)) {
+      const body=await readJson(request)
+      if (body instanceof Response) return body
+      const saved=await saveTemplate(env,body,template)
+      return "response" in saved ? saved.response : reply(saved.template,template ? 200 : 201)
+    }
+    return fail(405,"method_not_allowed","Use GET or POST on /license-templates, and GET, PATCH or DELETE on /license-templates/{id}.")
+  }
   if (resource === "licenses") return licenseRoute(ctx, rest)
   if (resource === "apps") return appRoute(ctx, rest)
   if (resource === "statuses" && rest.length === 0 && request.method === "GET") return reply({ data: DEFAULT_STATUSES.map(serializeStatus), next: null })

@@ -32,6 +32,7 @@ const NAV = [
   { title: "Overview", to: "/overview", icon: LayoutDashboard },
   { title: "Apps", to: "/apps", icon: Boxes },
   { title: "Licences", to: "/licenses", icon: KeyRound },
+  { title: "Licence templates", to: "/license-templates", icon: Boxes },
   { title: "Analytics", to: "/analytics", icon: ChartColumn },
   { title: "Protection", to: "/protection", icon: ShieldBan },
   { title: "Integrations", to: "/integrations", icon: Plug },

@@ -96,7 +96,7 @@ The section lists the latest tags with their state: *In progress* (with the curr
 
 ## API
 
-A track's repository is managed under the track: `/apps/{app}/tracks/{track}/source` (and `/licenses/{id}/tracks/{track}/source`), where `{track}` is the track's id or name.
+A track's repository is managed under the track: `/apps/{app}/tracks/{track}/source` (and `/apps/{app}/tracks/{track}/source`), where `{track}` is the track's id or name.
 
 | Method and path | Scope | Description |
 |---|---|---|

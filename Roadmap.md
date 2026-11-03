@@ -50,7 +50,13 @@ Warden uses [semantic versioning](https://semver.org/). The version is in `packa
 
 Version 1.0.0 freezes the check response and the API, so everything that would change them comes first. Order agreed on 2026-10-10; on 2026-10-11 product completeness moved before trust, so the security work comes last, on the finished product.
 
-### 0.5.0: trust
+### 0.5.0: tagged app licences
+
+- [x] Multiple tagged apps under one key, app-owned status definitions and releases
+- [x] Shared or separate expiry dates and per-app renewals
+- [x] Licence templates, migration and API documentation
+
+### 0.6.0: trust
 
 - [ ] **End-to-end tests on real Cloudflare**: the GitHub App flow with a real app, private repositories with a token, phone-width layout, and CI that deploys a throwaway Worker and runs the checks against it
 - [ ] **Backups and export**: documented and tested D1 export and restore, and a data export from the dashboard

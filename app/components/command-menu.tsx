@@ -1,3 +1,4 @@
+import type { AttachmentFacts } from "#/lib/entitlements"
 import { useEffect, useMemo, useRef, useState } from "react"
 import { useFetcher, useNavigate } from "react-router"
 import { Boxes, Braces, CornerDownLeft, KeyRound, LayoutDashboard, Plus, Search } from "lucide-react"
@@ -6,12 +7,13 @@ import { LicenseStatusBadge } from "#/components/status-badge"
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "#/components/ui/dialog"
 import { cn } from "#/lib/utils"
 
-type Item = { id: string; group: string; label: string; hint?: string; icon: React.ComponentType<{ className?: string }>; to: string; license?: { id: string; status: string; expires_at: number | null; app_id: string | null } }
+type Item = { id: string; group: string; label: string; hint?: string; icon: React.ComponentType<{ className?: string }>; to: string; license?: { apps?: AttachmentFacts[]; id: string; status: string; expires_at: number | null; app_id: string | null } }
 
 const PAGES: Item[] = [
   { id: "p-overview", group: "Go to", label: "Overview", icon: LayoutDashboard, to: "/overview" },
   { id: "p-licences", group: "Go to", label: "Licences", icon: KeyRound, to: "/licenses" },
   { id: "p-apps", group: "Go to", label: "Apps", icon: Boxes, to: "/apps" },
+  { id: "p-templates", group: "Go to", label: "Licence templates", icon: Boxes, to: "/license-templates" },
   { id: "p-api", group: "Go to", label: "API keys", icon: Braces, to: "/api-keys" },
   { id: "a-licence", group: "Create", label: "New licence", icon: Plus, to: "/licenses/new" },
   { id: "a-app", group: "Create", label: "New app", icon: Plus, to: "/apps/new" },
@@ -125,7 +127,7 @@ export function CommandMenu({ open, onOpenChange }: { open: boolean; onOpenChang
                     <div className="truncate font-medium">{item.label}</div>
                     {item.hint && <div className="truncate text-xs text-muted-foreground">{item.hint}</div>}
                   </div>
-                  {item.license && <LicenseStatusBadge license={item.license} />}
+                  {item.license && (item.license.apps?.length ? <span className="text-xs text-muted-foreground">{item.license.apps.filter((e) => e.valid).length}/{item.license.apps.length} apps valid</span> : <LicenseStatusBadge license={item.license} />)}
                   {index === active && <CornerDownLeft className="size-3.5 shrink-0 text-muted-foreground" />}
                 </div>
               </div>

@@ -18,7 +18,7 @@ import { StatusSection } from "#/components/status-section"
 import { DEFAULT_STATUSES, statusLabel } from "#/lib/statuses"
 import { dailyTraffic } from "~/server/analytics.server"
 import { requireAuth } from "~/server/auth.server"
-import { deleteApp, getApp, getAppSummary, versionsInUse } from "~/server/apps.server"
+import { deleteApp, getApp, getAppSummary, versionsInUse, type App } from "~/server/apps.server"
 import { applyFileForm, listFiles, storageConfigured } from "~/server/files.server"
 import { applySourceForm, trackPanels } from "~/server/sources.server"
 import { applyTrackForm, listAppTracks } from "~/server/tracks.server"
@@ -34,7 +34,7 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
   const app = await getAppSummary(env, params.appId)
   if (!app) throw new Response("App not found", { status: 404 })
   // Everything the page shows is read at once; only the status counts wait, and only for an app with its own statuses.
-  const [custom, licenses, files, statuses, versions, traffic, tracks, githubApp] = await Promise.all([
+  const [custom, licenses, files, statuses, versions, traffic, tracks, githubApp, baseApp, baseFiles, baseTracks, projects] = await Promise.all([
     hasCustomSet(env, { app: app.id }),
     queryLicenses(env, { appId: app.id, limit: 1000 }),
     listFiles(env, { app }),
@@ -43,14 +43,26 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
     dailyTraffic(env, { app: app.id }, 30, Date.now(), "checks"),
     trackPanels(env, { app }, new URL(request.url).origin),
     getGitHubApp(env),
+    // A project app created by migration 0016 inherits the releases of its base app.
+    app.base_app_id ? getApp(env, app.base_app_id) : Promise.resolve(null),
+    app.base_app_id ? listFiles(env, { app: { id: app.base_app_id } as App }) : Promise.resolve([]),
+    app.base_app_id ? listAppTracks(env, app.base_app_id) : Promise.resolve([]),
+    // And the other way round: the project apps that inherit this app's releases.
+    env.DB.prepare("SELECT id, name FROM apps WHERE base_app_id = ? ORDER BY name").bind(app.id).all<{ id: string; name: string }>().then((r) => r.results),
   ])
-  const baseApp=app.base_app_id ? await getApp(env,app.base_app_id) : null
-  const baseFiles=baseApp ? await listFiles(env,{app:baseApp}) : []
-  const baseTracks=baseApp ? await listAppTracks(env,baseApp.id) : []
-  const covered=new Set(tracks.flatMap((p) => p.track.statuses))
-  const inherited=baseApp ? {appName:baseApp.name,appHref:`/apps/${baseApp.id}`,statuses,tracks:baseTracks.map((t) => ({...t,statuses:t.statuses.split(","),check_domain:t.check_domain === 1})),files:baseFiles.map((f) => f.track_id ? {...f,statuses:f.statuses.split(",").filter((s) => !covered.has(s)).join(",")} : f)} : null
+  // The base app's releases apply only to the statuses the project's own tracks do not serve.
+  const covered = new Set(tracks.flatMap((p) => p.track.statuses))
+  const inherited = baseApp
+    ? {
+        appName: baseApp.name,
+        appHref: `/apps/${baseApp.id}`,
+        statuses,
+        tracks: baseTracks.map((t) => ({ ...t, statuses: t.statuses.split(","), check_domain: t.check_domain === 1 })),
+        files: baseFiles.map((f) => (f.track_id ? { ...f, statuses: f.statuses.split(",").filter((s) => !covered.has(s)).join(",") } : f)),
+      }
+    : null
   const usage = custom ? await statusCounts(env, { app: app.id }) : {}
-  return { app, inherited, licenses, files, statuses, custom, usage, versions, traffic: traffic.series, filesConfigured: storageConfigured(env), tracks, githubApp: githubApp !== null }
+  return { app, inherited, projects, licenses, files, statuses, custom, usage, versions, traffic: traffic.series, filesConfigured: storageConfigured(env), tracks, githubApp: githubApp !== null }
 }
 
 export function shouldRevalidate(args: ShouldRevalidateFunctionArgs) {
@@ -84,7 +96,7 @@ const TABS = ["licences", "releases", "statuses"]
 
 export default function AppPage({ loaderData, actionData }: Route.ComponentProps) {
   const actionError = actionData && "error" in actionData ? actionData.error : null
-  const { app, inherited, licenses, files, statuses, custom, usage, versions, traffic, filesConfigured, tracks, githubApp } = loaderData
+  const { app, inherited, projects, licenses, files, statuses, custom, usage, versions, traffic, filesConfigured, tracks, githubApp } = loaderData
   const checks = traffic.reduce((n, d) => n + d.valid + d.invalid, 0)
   const [tab, setTab] = useRouteTab(TABS)
   const [deleting, setDeleting] = useState(false)
@@ -194,7 +206,29 @@ export default function AppPage({ loaderData, actionData }: Route.ComponentProps
           </Link>
         </p>
 
-        {inherited && <p className="text-sm text-muted-foreground">This migrated project inherits releases from <Link to={inherited.appHref} className="underline">{inherited.appName}</Link> for statuses its own tracks do not override. Status definitions are managed on this project app.</p>}
+        {inherited && (
+          <p className="max-w-prose text-sm text-muted-foreground">
+            Created when upgrading to 0.5.0 for a licence that had its own releases, statuses or repository. It inherits the releases of{" "}
+            <Link to={inherited.appHref} className="text-foreground underline underline-offset-2">
+              {inherited.appName}
+            </Link>{" "}
+            for the statuses its own tracks do not serve. Its statuses are managed here. Rename it from Edit.
+          </p>
+        )}
+        {projects.length > 0 && (
+          <p className="max-w-prose text-sm text-muted-foreground">
+            {projects.length === 1 ? "One licence" : `${projects.length} licences`} of this app had their own releases, statuses or repository before 0.5.0 and now use a project app that inherits this app&apos;s releases:{" "}
+            {projects.map((p, i) => (
+              <span key={p.id}>
+                {i > 0 && ", "}
+                <Link to={`/apps/${p.id}`} className="text-foreground underline underline-offset-2">
+                  {p.name}
+                </Link>
+              </span>
+            ))}
+            .
+          </p>
+        )}
         <div className="space-y-5">
           <RouteTabs
             value={tab}

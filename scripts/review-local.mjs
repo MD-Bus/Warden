@@ -7,8 +7,11 @@ import { fileURLToPath } from "node:url"
 const root = fileURLToPath(new URL("../", import.meta.url))
 const node22 = "/opt/homebrew/opt/node@22/bin"
 const password = randomBytes(18).toString("base64url")
-const origin = "http://127.0.0.1:5180"
-const child = spawn("npm", ["run", "dev", "--", "--port", "5180", "--host", "127.0.0.1"], {
+// REVIEW_PORT picks another port. --strictPort stops instead of moving to the next free port, which would seed
+// whichever server already listens on the expected one.
+const port = process.env.REVIEW_PORT || "5180"
+const origin = `http://127.0.0.1:${port}`
+const child = spawn("npm", ["run", "dev", "--", "--port", port, "--strictPort", "--host", "127.0.0.1"], {
   cwd: root,
   env: {
     ...process.env,

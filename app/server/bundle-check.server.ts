@@ -49,40 +49,43 @@ export async function handleBundleCheck(request: Request, env: Env, ctx: Executi
   if (selected.length > 1 && pick("version") !== undefined && pick("version") !== null)
     return send({ error: { code: "tag_required", message: "Send tag with version, or send a versions object keyed by tag." } }, 422)
   const ip = clientIp(request)
-  const results: ({ valid: boolean } & Record<string, unknown>)[] = []
-  const records: Promise<void>[] = []
-  for (const c of selected) {
-    const set = await getStatusSetForApp(env, c.app_id)
-    let activated = license.max_sites !== null ? (await listActivations(env, license.id)).map((a) => a.domain) : []
-    let check = buildCheckResponse(c, domain, now, activated, set)
-    // Reserve the shared domain slot before returning a valid answer, including concurrent checks.
-    if (check.valid && domain) {
-      await recordActivation(env, license, domain, now, null, ip)
-      if (license.max_sites !== null) {
-        activated = (await listActivations(env, license.id)).map((a) => a.domain)
-        check = buildCheckResponse(c, domain, now, activated, set)
-      }
+  const versions = data.versions && typeof data.versions === "object" && !Array.isArray(data.versions) ? (data.versions as Record<string, unknown>) : {}
+  const channel = isChannel(pick("channel")) ? (pick("channel") as "stable" | "beta") : "stable"
+  // Sites and status sets are read once for the whole request, not once per attached app.
+  const [sets, sites] = await Promise.all([Promise.all(selected.map((c) => getStatusSetForApp(env, c.app_id))), license.max_sites !== null ? listActivations(env, license.id) : Promise.resolve([])])
+  let activated = sites.map((a) => a.domain)
+  let checks = selected.map((c, i) => buildCheckResponse(c, domain, now, activated, sets[i]))
+  // Reserve the shared domain slot before returning a valid answer (the INSERT enforces the limit for concurrent checks),
+  // then re-evaluate against the sites actually registered.
+  if (domain && checks.some((check) => check.valid)) {
+    await recordActivation(env, license, domain, now, null, ip)
+    if (license.max_sites !== null) {
+      activated = (await listActivations(env, license.id)).map((a) => a.domain)
+      checks = selected.map((c, i) => buildCheckResponse(c, domain, now, activated, sets[i]))
     }
-    const versions = data.versions && typeof data.versions === "object" && !Array.isArray(data.versions) ? (data.versions as Record<string, unknown>) : {}
-    const version = readReportedVersion(selected.length === 1 ? (pick("version") ?? versions[c.tag!]) : versions[c.tag!])
-    const channel = isChannel(pick("channel")) ? (pick("channel") as "stable" | "beta") : "stable"
-    if (version) {
-      const files = await visibleFiles(env, c, domain, check, now, set, url.origin)
-      const latest = latestRelease(
-        files.filter((f) => f.available),
-        channel,
-      )
-      check.update = { current: version, available: Boolean(latest && compareVersions(latest.version, version) > 0), latest: latest ? await releaseSummary(latest, signing, domain) : null }
-    }
-    const result = { ...check, tag: c.tag, app: { id: c.app_id, slug: c.app_slug, name: c.app_name } }
-    results.push(result)
-    records.push(record(env, c, result.status, check.valid, domain, version, ip, now))
   }
+  const results = await Promise.all(
+    selected.map(async (c, i) => {
+      const check = checks[i]
+      const version = readReportedVersion(selected.length === 1 ? (pick("version") ?? versions[c.tag!]) : versions[c.tag!])
+      if (version) {
+        const files = await visibleFiles(env, c, domain, check, now, sets[i], url.origin)
+        const latest = latestRelease(
+          files.filter((f) => f.available),
+          channel,
+        )
+        check.update = { current: version, available: Boolean(latest && compareVersions(latest.version, version) > 0), latest: latest ? await releaseSummary(latest, signing, domain) : null }
+      }
+      return { result: { ...check, tag: c.tag, app: { id: c.app_id, slug: c.app_slug, name: c.app_name } } as { valid: boolean } & Record<string, unknown>, version }
+    }),
+  )
+  // One batch records every app's check.
+  const records = env.DB.batch(selected.flatMap((c, i) => checkStatements(env, c, String(results[i].result.status), checks[i].valid, domain, results[i].version, ip, now)))
   ctx.waitUntil(env.DB.prepare("UPDATE licenses SET last_check_at=?,last_check_domain=?,check_count=check_count+1 WHERE id=?").bind(now, domain, license.id).run())
-  ctx.waitUntil(Promise.all(records).then(() => applyRules(env, ip, { kind: "check", invalid: results.some((r) => !r.valid) }, now)))
-  return send(results.length === 1 ? results[0] : { name: license.name, apps: results })
+  ctx.waitUntil(records.then(() => applyRules(env, ip, { kind: "check", invalid: results.some((r) => !r.result.valid) }, now)))
+  return send(results.length === 1 ? results[0].result : { name: license.name, apps: results.map((r) => r.result) })
 }
-async function record(env: Env, c: AppContext, status: string, valid: boolean, domain: string | null, version: string | null, ip: string | null, now: number) {
+function checkStatements(env: Env, c: AppContext, status: string, valid: boolean, domain: string | null, version: string | null, ip: string | null, now: number): D1PreparedStatement[] {
   const statements = [
     env.DB.prepare("UPDATE license_apps SET last_check_at=?,check_count=check_count+1 WHERE id=?").bind(now, c.attachment_id!),
     env.DB.prepare("INSERT INTO activity (license_id,at,event,status,domain,detail,ip,app_id,tag) VALUES (?,?,'check',?,?,?,?,?,?)").bind(
@@ -102,5 +105,5 @@ async function record(env: Env, c: AppContext, status: string, valid: boolean, d
         `INSERT INTO activation_versions (attachment_id,domain,version,last_seen_at) VALUES (?,?,?,?) ON CONFLICT(attachment_id,domain) DO UPDATE SET version=COALESCE(excluded.version,activation_versions.version),last_seen_at=excluded.last_seen_at`,
       ).bind(c.attachment_id!, domain, version, now),
     )
-  await env.DB.batch(statements)
+  return statements
 }

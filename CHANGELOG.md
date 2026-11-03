@@ -4,8 +4,33 @@ All notable changes, newest first. Warden follows [semantic versioning](https://
 
 **Next, towards 1.0.0** (details in [Roadmap.md](Roadmap.md)):
 
-- **0.5.0, trust**: end-to-end tests on real Cloudflare (GitHub App, private repositories, phone width, CI), backups and export, two-factor sign-in or Cloudflare Access, a complete OpenAPI description checked by tests, independent security review
+- **0.6.0, trust**: end-to-end tests on real Cloudflare (GitHub App, private repositories, phone width, CI), backups and export, two-factor sign-in or Cloudflare Access, a complete OpenAPI description checked by tests, independent security review
 - **1.0.0**: the check response and the API are frozen
+
+## 0.5.0 (2026-11-03)
+
+One licence key for several tagged apps, with shared or separate expiry dates and reusable licence templates. Migration 0016 runs on the first request. Read the [0.4 to 0.5 upgrade notes](docs/upgrade-notes.md) before updating API clients or attaching a second app to an existing licence.
+
+### Added
+
+- One licence key can cover up to 50 apps. Each attachment has a unique tag, its own selected status, public message and grace override.
+- Shared or separate expiry dates; renewal extends every app in shared mode or the selected tag in separate mode.
+- Licence templates prefill tags and optional default apps, with required and optional slots. Editing a template leaves existing licences intact.
+- Tag-scoped checks, downloads, update selection, reported versions, activity and webhook events. Checks without a tag return separate app results for multi-app licences.
+- `npm run review` starts a local instance with demonstration apps, releases, templates and both expiry modes. Credentials stay in process memory.
+
+### Fixed
+
+- The local review command disables Wrangler file logging directly. A null-device log path was interpreted as a directory and caused an additional startup error.
+
+### Changed
+
+- Apps own status definitions, files, release tracks and repository connections. The dashboard no longer creates standalone licences or licence-owned releases.
+- Migration 0016 converts existing standalone projects to apps, preserving licence keys, file ids, checksums, R2 keys and download URLs. Custom licence releases become project apps that continue inheriting their original app's releases for statuses they do not override. No stored packages are copied or deleted.
+- New licence API requests use `apps: [{ tag, app, status?, expires_at? }]` and `expiry_mode`; their responses contain `apps` rather than a top-level status or validity. Select `tag` on checks and downloads, and send it when changing a status or renewing separate expiry. See [upgrade notes](docs/upgrade-notes.md).
+- The old singular `app`, status and licence-owned resource API remains available for legacy requests until 1.0. Migrated licences use the new model; their resource writes return `409 app_owned`. Manage releases and status definitions on their apps.
+- Site limits count domains once across all attached apps. Installed versions are recorded per tag. CSV exports have one row per attached app, adding tag and expiry mode.
+- Licence list validity means every attached app is valid; invalid includes licences with any invalid app. Expiring and silent views match any app.
 
 ## 0.4.1 (2026-10-28)
 

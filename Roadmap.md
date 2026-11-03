@@ -1,6 +1,6 @@
 # Roadmap
 
-Warden is **pre-1.0** (current: 0.4.1 released; 0.5.0 next). The data model, the check response and the `/api/v1` endpoints can still change between 0.x versions; changes are listed in [CHANGELOG.md](CHANGELOG.md). Version 1.0.0 means the check response and API are stable and only change in backward compatible ways.
+Warden is **pre-1.0** (current build: 0.5.0; next milestone: 0.6.0). The data model, the check response and the `/api/v1` endpoints can still change between 0.x versions; changes are listed in [CHANGELOG.md](CHANGELOG.md). Version 1.0.0 means the check response and API are stable and only change in backward compatible ways. The Deploy button installs `main`; the approved `develop` build becomes the default after its release pull request is merged.
 
 This is a plan, not a promise. Order can change.
 
@@ -46,11 +46,21 @@ Warden uses [semantic versioning](https://semver.org/). The version is in `packa
 - **Outgoing webhooks**: eight licence events, signed with the installation's key, retried for about a day, with a delivery log
 - **Public documentation site** (the `Warden-docs` repository), publishing the documentation of the released version
 
+## Current build
+
+### 0.5.0: tagged app licences (2026-11-03)
+
+- [x] Multiple tagged apps under one key, app-owned status definitions and releases
+- [x] Shared or separate expiry dates and per-app renewals
+- [x] Licence templates, migration and API documentation
+
+Version 0.5.0 is prepared on `develop`. A version tag identifies the approved build; `main` and the public documentation continue through their release pull requests.
+
 ## Towards 1.0.0
 
-Version 1.0.0 freezes the check response and the API, so everything that would change them comes first. Order agreed on 2026-10-10; on 2026-10-11 product completeness moved before trust, so the security work comes last, on the finished product.
+Version 1.0.0 freezes the check response and the API, so everything that would change them comes first. Trust work follows the completed licensing model.
 
-### 0.5.0: trust
+### 0.6.0: trust
 
 - [ ] **End-to-end tests on real Cloudflare**: the GitHub App flow with a real app, private repositories with a token, phone-width layout, and CI that deploys a throwaway Worker and runs the checks against it
 - [ ] **Backups and export**: documented and tested D1 export and restore, and a data export from the dashboard

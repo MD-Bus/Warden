@@ -1,205 +1,47 @@
 import { useState } from "react"
 import { Form, Link, useNavigate, useNavigation } from "react-router"
+import { Plus, Trash2 } from "lucide-react"
 import { Button } from "#/components/ui/button"
 import { Input } from "#/components/ui/input"
-import { FieldLabel } from "#/components/help-tip"
 import { Textarea } from "#/components/ui/textarea"
 import { NativeSelect } from "#/components/ui/native-select"
-import { useStatusSetForLicense, useStatusSets } from "#/components/status-context"
-import { StatusDraft } from "#/components/status-draft"
-import { defaultStatusKey, findStatus, MAX_GRACE_DAYS, type StatusSet } from "#/lib/statuses"
+import { FieldLabel } from "#/components/help-tip"
+import { useStatusSets } from "#/components/status-context"
+import { DEFAULT_STATUSES, defaultStatusKey } from "#/lib/statuses"
+import type { ExpiryMode, LicenseTemplate } from "#/lib/entitlements"
 
-export type FormValues = {
-  name: string
-  customer_name: string
-  customer_email: string
-  app_id: string
-  status: string
-  expires: string
-  max_sites: string
-  grace_days: string
-  domains: string
-  message: string
-  notes: string
-}
-
-export const EMPTY_FORM: FormValues = { name: "", customer_name: "", customer_email: "", app_id: "", status: "active", expires: "", max_sites: "", grace_days: "", domains: "", message: "", notes: "" }
-
-export type AppOption = { id: string; name: string; grace_days: number | null }
-
-type Props = {
-  values: FormValues
-  apps: AppOption[]
-  error?: string
-  submitLabel: string
-  cancelTo: string
-  /** On the "new licence" page, choosing an app reloads the page so the app's defaults can be applied. */
-  reloadOnAppChange?: boolean
-  /** Describes the defaults applied from the selected app. */
-  appHint?: string
-  /** The licence being edited, which may have statuses of its own. */
-  licenseId?: string
-  /** Offer to customise the statuses of the licence being created. */
-  allowStatusCustomisation?: boolean
-}
-
-export function LicenseForm({ values, apps, error, submitLabel, cancelTo, reloadOnAppChange, appHint, licenseId = "", allowStatusCustomisation = false }: Props) {
-  const busy = useNavigation().state === "submitting"
-  const navigate = useNavigate()
-  const [status, setStatus] = useState(values.status)
-  const [appId, setAppId] = useState(values.app_id)
-  // The statuses available depend on the licence and its app: either can have its own set.
-  const inherited = useStatusSetForLicense({ id: licenseId, app_id: appId || null })
-  // Statuses the edited licence has of its own (only possible while it is standalone).
-  const ownStatuses = useStatusSets().byLicense[licenseId]
-  // Statuses being drafted for a licence that does not exist yet. They replace the inherited ones for this form.
-  const [draft, setDraft] = useState<StatusSet | null>(null)
-  // Only a standalone licence can have statuses of its own; a licence in an app uses its app's.
-  const statuses = !appId && draft ? draft : inherited
-  const appGrace = apps.find((a) => a.id === appId)?.grace_days ?? null
-  const gracePlaceholder = appId ? `App: ${appGrace ? `${appGrace} days` : "none"}` : "None"
-
-  return (
-    <Form method="post" className="max-w-2xl space-y-6">
-      <div className="space-y-2">
-        <FieldLabel htmlFor="app_id" help="The app (product) this licence is for. A licence under an app starts with the app's default duration, status, message and site limit, and can download the app's shared files. Leave empty for a standalone licence.">
-          App
-        </FieldLabel>
-        <NativeSelect
-          id="app_id"
-          name="app_id"
-          value={appId}
-          onChange={(e) => {
-            setAppId(e.target.value)
-            if (e.target.value) setDraft(null)
-            // Keep the status if the new app has it, otherwise fall back to that app's default.
-            if (!findStatus(statuses, status)) setStatus(defaultStatusKey(statuses))
-            if (reloadOnAppChange) navigate(e.target.value ? `?app=${e.target.value}` : "?", { replace: true })
-          }}
-        >
-          <option value="">No app (standalone licence)</option>
-          {apps.map((app) => (
-            <option key={app.id} value={app.id}>
-              {app.name}
-            </option>
-          ))}
-        </NativeSelect>
-        {appHint && <p className="text-xs text-muted-foreground">{appHint}</p>}
-        {appId && licenseId && ownStatuses && (
-          <p className="text-xs text-amber-600 dark:text-amber-400">This licence has its own statuses. In an app it uses the app&apos;s statuses, so its own are removed when you save.</p>
-        )}
-      </div>
-
-      <div className="grid gap-4 sm:grid-cols-2">
-        <div className="space-y-2">
-          <FieldLabel htmlFor="name" help="An internal name to recognise the licence, for example the site or the order.">
-            Name
-          </FieldLabel>
-          <Input id="name" name="name" required autoFocus defaultValue={values.name} placeholder="Harbor Studio website" />
-        </div>
-        <div className="space-y-2">
-          <FieldLabel htmlFor="customer_name" help="Who the licence was issued to. Optional; searchable in the licence list.">
-            Customer
-          </FieldLabel>
-          <Input id="customer_name" name="customer_name" defaultValue={values.customer_name} placeholder="Harbor Studio" />
-        </div>
-      </div>
-
-      <div className="space-y-2">
-        <FieldLabel htmlFor="customer_email" help="Contact address of the customer. Optional. For your reference only; Warden does not send email.">
-          Customer email
-        </FieldLabel>
-        <Input id="customer_email" name="customer_email" type="email" defaultValue={values.customer_email} placeholder="billing@harborstudio.com" />
-      </div>
-
-      <div className="grid gap-4 sm:grid-cols-2">
-        <div className="space-y-2">
-          <FieldLabel htmlFor="status" help="Controls what sites are told when they check this licence. Change it any time. Statuses can be customised on the Statuses page. A status can have an expiry rule, for example Active becoming Expired after the expiry date.">
-            Status
-          </FieldLabel>
-          <NativeSelect id="status" name="status" value={findStatus(statuses, status) ? status : defaultStatusKey(statuses)} onChange={(e) => setStatus(e.target.value)}>
-            {statuses.map((s) => (
-              <option key={s.key} value={s.key}>
-                {s.label}
-              </option>
-            ))}
-          </NativeSelect>
-          <p className="text-xs text-muted-foreground">{findStatus(statuses, status)?.description ?? ""}</p>
-        </div>
-        <div className="space-y-2">
-          <FieldLabel htmlFor="expires" help="After this date (end of day, UTC) a licence whose status has an expiry rule, such as Active, is reported with the status that rule points to, such as Expired. Leave empty for no expiry. Statuses without an expiry rule, such as Completed, ignore it.">
-            Expiry date
-          </FieldLabel>
-          <Input id="expires" name="expires_at" type="date" key={values.expires} defaultValue={values.expires} />
-          <p className="text-xs text-muted-foreground">Optional. Leave empty for no expiry.</p>
-        </div>
-      </div>
-
-      <div className="grid gap-4 sm:grid-cols-2">
-        <div className="space-y-2">
-          <FieldLabel htmlFor="max_sites" help="How many different sites (domains) may use this licence. Each site registers automatically on its first successful check; checks from additional sites return site_limit_reached once the limit is reached. You can release a site on the licence page to free its slot.">
-            Maximum sites
-          </FieldLabel>
-          <Input id="max_sites" name="max_sites" type="number" min={1} step={1} key={values.max_sites} defaultValue={values.max_sites} placeholder="Unlimited" className="max-w-40" />
-          <p className="text-xs text-muted-foreground">Optional. Leave empty for unlimited.</p>
-        </div>
-        <div className="space-y-2">
-          <FieldLabel htmlFor="grace_days" help="Days the licence stays valid after its expiry date, so a late renewal does not interrupt the site. During the grace period the check returns valid: true, grace_ends_at and a reminder in message. Leave empty to use the app's setting; 0 for no grace period.">
-            Grace period (days)
-          </FieldLabel>
-          <Input id="grace_days" name="grace_days" type="number" min={0} max={MAX_GRACE_DAYS} step={1} key={values.grace_days} defaultValue={values.grace_days} placeholder={gracePlaceholder} className="max-w-40" />
-          <p className="text-xs text-muted-foreground">{appId ? "Optional. Leave empty for the app's setting." : "Optional. Leave empty for none."}</p>
-        </div>
-      </div>
-
-      <div className="space-y-2">
-        <FieldLabel htmlFor="domains" help="A fixed list of domains this licence is restricted to. A site sends its domain as ?domain= when it checks. Subdomains of an allowed domain match. Leave empty to allow any domain (within the site limit).">
-          Allowed domains
-        </FieldLabel>
-        <Input id="domains" name="domains" defaultValue={values.domains} placeholder="harborstudio.com, staging.harborstudio.com" />
-        <p className="text-xs text-muted-foreground">Comma separated. Optional.</p>
-      </div>
-
-      <div className="space-y-2">
-        <FieldLabel htmlFor="message" help="Returned to the site in the check response as the message field. Your site can show it when the licence is not valid, for example a payment reminder. Visible to anyone with the licence key.">
-          Public message
-        </FieldLabel>
-        <Input id="message" name="message" key={values.message} defaultValue={values.message} placeholder="Payment overdue. Please contact support." maxLength={300} />
-        <p className="text-xs text-muted-foreground">Optional. Returned to the site in the check response.</p>
-      </div>
-
-      {allowStatusCustomisation && !appId && (
-        <StatusDraft
-          owner="licence"
-          inherited={inherited}
-          inheritedFrom="the default statuses"
-          value={draft}
-          onChange={(set) => {
-            setDraft(set)
-            // The chosen status must exist in the statuses the licence will have.
-            const next = set ?? inherited
-            if (!findStatus(next, status)) setStatus(defaultStatusKey(next))
-          }}
-        />
-      )}
-
-      <div className="space-y-2">
-        <FieldLabel htmlFor="notes" help="For your own reference. Never returned by the check endpoint or the download endpoint.">
-          Internal notes
-        </FieldLabel>
-        <Textarea id="notes" name="notes" rows={4} defaultValue={values.notes} placeholder="Payment plan, contact details, agreement reference" />
-      </div>
-
-      {error && <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">{error}</div>}
-
-      <div className="flex gap-2">
-        <Button type="submit" disabled={busy}>
-          {busy ? "Saving..." : submitLabel}
-        </Button>
-        <Button asChild variant="outline">
-          <Link to={cancelTo}>Cancel</Link>
-        </Button>
-      </div>
-    </Form>
-  )
+export type AppOption = { id:string; name:string; slug:string; default_status:string; default_duration_days:number|null; default_message:string; grace_days:number|null }
+export type AppRow = { tag:string; app:string; status:string; expires_at:string; grace_days:string; message:string; required?:boolean }
+export type FormValues = { name:string; customer_name:string; customer_email:string; max_sites:string; domains:string; message:string; notes:string; grace_days:string; expires:string; expiry_mode:ExpiryMode; apps:AppRow[] }
+export const EMPTY_FORM:FormValues={name:"",customer_name:"",customer_email:"",max_sites:"",domains:"",message:"",notes:"",grace_days:"",expires:"",expiry_mode:"shared",apps:[]}
+export const dateValue=(value:number|null) => value === null ? "" : new Date(value).toISOString().slice(0,10)
+export function LicenseForm({values,apps,templates=[],templateId="",error,submitLabel,cancelTo}:{values:FormValues;apps:AppOption[];templates?:LicenseTemplate[];templateId?:string;error?:string;submitLabel:string;cancelTo:string}) {
+  const [rows,setRows]=useState<AppRow[]>(values.apps.length ? values.apps : [{tag:"",app:"",status:"",expires_at:"",grace_days:"",message:""}])
+  const [mode,setMode]=useState(values.expiry_mode)
+  const [expiry,setExpiry]=useState(values.expires)
+  const sets=useStatusSets(), navigate=useNavigate(), busy=useNavigation().state !== "idle"
+  const change=(index:number,patch:Partial<AppRow>) => setRows((prev) => prev.map((r,i) => i === index ? {...r,...patch} : r))
+  return <Form method="post" className="max-w-4xl space-y-6">
+    {templates.length>0 && <div className="space-y-2"><FieldLabel htmlFor="template" help="Fills the app tags and expiry mode. Changes to a template do not change existing licences.">Licence template</FieldLabel><NativeSelect id="template" value={templateId} onChange={(e) => navigate(e.target.value ? `?template=${e.target.value}` : "?")}><option value="">Start without a template</option>{templates.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}</NativeSelect></div>}
+    <input type="hidden" name="template" value={templateId}/>
+    <div className="grid gap-4 sm:grid-cols-2"><div className="space-y-2"><FieldLabel htmlFor="name">Name</FieldLabel><Input id="name" name="name" required maxLength={120} defaultValue={values.name} placeholder="Harbor Studio website"/></div><div className="space-y-2"><FieldLabel htmlFor="customer_name">Customer</FieldLabel><Input id="customer_name" name="customer_name" maxLength={120} defaultValue={values.customer_name} placeholder="Harbor Studio"/></div></div>
+    <div className="space-y-2"><FieldLabel htmlFor="customer_email" help="For your reference. Warden does not send email.">Customer email</FieldLabel><Input id="customer_email" name="customer_email" type="email" defaultValue={values.customer_email}/></div>
+    <div className="rounded-lg border bg-card p-4 space-y-4"><div className="space-y-2"><FieldLabel htmlFor="expiry_mode" help="Shared: one date renews every attached app. Separate: each app has its own date. Statuses without an expiry rule, such as Completed, ignore these dates.">Expiry mode</FieldLabel><NativeSelect id="expiry_mode" name="expiry_mode" value={mode} onChange={(e) => {const next=e.target.value as ExpiryMode; if(next === "separate") setRows((prev) => prev.map((r) => ({...r,expires_at:expiry})));setMode(next)}}><option value="shared">Shared expiry for all apps</option><option value="separate">Separate expiry for each app</option></NativeSelect></div>
+    {mode === "shared" && <div className="space-y-2"><FieldLabel htmlFor="expires_at" help="End of this day in UTC. Leave empty for no expiry. Switching from separate dates applies this date to every attached app.">Shared expiry date</FieldLabel><Input id="expires_at" name="expires_at" type="date" value={expiry} onChange={(e) => setExpiry(e.target.value)} className="max-w-xs"/></div>}
+    <div className="space-y-2"><FieldLabel htmlFor="grace_days" help="Overrides the grace period for every app. Leave empty to use each attachment's setting, then its app's. Apps can have different grace periods even with a shared expiry date. Use 0 for none.">Grace period override (days)</FieldLabel><Input id="grace_days" name="grace_days" type="number" min={0} max={365} defaultValue={values.grace_days} placeholder="Use each app's setting" className="max-w-xs"/></div></div>
+    <section className="space-y-4"><div><h2 className="text-lg font-semibold">Attached apps</h2><p className="text-sm text-muted-foreground">One key covers every app below. Tags identify what the site requests; each app supplies its own statuses and releases.</p></div>
+    <input type="hidden" name="apps_json" value={JSON.stringify(rows.filter((r) => r.app || r.required).map((r) => ({tag:r.tag,app:r.app,status:r.status || undefined,expires_at:r.expires_at || null,grace_days:r.grace_days === "" ? null : Number(r.grace_days),message:r.message})))}/>
+    {rows.map((row,index) => {const app=apps.find((a) => a.id === row.app), statuses=(row.app && sets.byApp[row.app]) || DEFAULT_STATUSES; return <div className="rounded-lg border bg-card p-4 space-y-4" key={index}>
+      <div className="flex items-center justify-between"><span className="text-sm font-medium">App {index+1}{row.required ? " · Required by template" : ""}</span>{!row.required && <Button type="button" size="icon" variant="ghost" aria-label={`Remove app ${index+1}`} onClick={() => setRows((prev) => prev.filter((_,i) => i !== index))}><Trash2 className="size-4"/></Button>}</div>
+      <div className="grid gap-4 sm:grid-cols-2"><div className="space-y-2"><FieldLabel htmlFor={`tag-${index}`} help="Unique within this licence. Lowercase letters, digits, underscores or hyphens, starting with a letter. Keep it stable once the site uses it.">Tag</FieldLabel><Input id={`tag-${index}`} value={row.tag} required={Boolean(row.app || row.required)} readOnly={Boolean(templateId && row.required)} maxLength={48} pattern="[a-z][a-z0-9_-]{0,47}" placeholder="parent-theme" onChange={(e) => change(index,{tag:e.target.value})}/></div><div className="space-y-2"><FieldLabel htmlFor={`app-${index}`}>App</FieldLabel><NativeSelect id={`app-${index}`} value={row.app} required={row.required} onChange={(e) => {const a=apps.find((a) => a.id === e.target.value), set=(a && sets.byApp[a.id]) || DEFAULT_STATUSES;change(index,{app:e.target.value,status:a?.default_status || defaultStatusKey(set),message:a?.default_message ?? "",grace_days:"",expires_at:a?.default_duration_days ? dateValue(Date.now()+a.default_duration_days*86400000) : ""})}}><option value="">Choose an app</option>{apps.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}</NativeSelect></div></div>
+      {app && <><div className="grid gap-4 sm:grid-cols-2"><div className="space-y-2"><FieldLabel htmlFor={`status-${index}`} help="The available statuses are defined on this app. Changing this value affects only this licence's access to the app.">Status</FieldLabel><NativeSelect id={`status-${index}`} value={row.status || app.default_status} onChange={(e) => change(index,{status:e.target.value})}>{statuses.map((s) => <option key={s.key} value={s.key}>{s.label}</option>)}</NativeSelect></div>{mode === "separate" && <div className="space-y-2"><FieldLabel htmlFor={`expiry-${index}`}>Expiry date</FieldLabel><Input id={`expiry-${index}`} type="date" value={row.expires_at} onChange={(e) => change(index,{expires_at:e.target.value})}/></div>}</div><div className="grid gap-4 sm:grid-cols-2"><div className="space-y-2"><FieldLabel htmlFor={`grace-${index}`} help="Used when the licence has no override. Empty inherits the app's grace period; 0 means none.">App grace period (days)</FieldLabel><Input id={`grace-${index}`} type="number" min={0} max={365} value={row.grace_days} placeholder={`App: ${app.grace_days ?? 0} days`} onChange={(e) => change(index,{grace_days:e.target.value})}/></div><div className="space-y-2"><FieldLabel htmlFor={`message-${index}`}>App public message</FieldLabel><Input id={`message-${index}`} maxLength={300} value={row.message} onChange={(e) => change(index,{message:e.target.value})}/></div></div></>}
+    </div>})}
+    <Button type="button" variant="outline" disabled={rows.length>=50} onClick={() => setRows((prev) => [...prev,{tag:"",app:"",status:"",expires_at:"",grace_days:"",message:""}])}><Plus/> Attach another app</Button>
+    {apps.length === 0 && <p className="text-sm">Create an <Link to="/apps/new" className="underline">app</Link> before issuing a licence.</p>}</section>
+    <div className="grid gap-4 sm:grid-cols-2"><div className="space-y-2"><FieldLabel htmlFor="domains" help="Comma separated. Subdomains also match. Empty permits any domain within the shared site limit.">Allowed domains</FieldLabel><Input id="domains" name="domains" defaultValue={values.domains} placeholder="harborstudio.com"/></div><div className="space-y-2"><FieldLabel htmlFor="max_sites" help="Counts unique domains across the entire licence. Several apps on the same domain use one slot.">Maximum sites</FieldLabel><Input id="max_sites" name="max_sites" type="number" min={1} max={100000} defaultValue={values.max_sites} placeholder="Unlimited"/></div></div>
+    <div className="space-y-2"><FieldLabel htmlFor="message" help="Overrides the public message for every attached app. Empty uses each app attachment's message or status message.">Public message override</FieldLabel><Input id="message" name="message" defaultValue={values.message} maxLength={300}/></div>
+    <div className="space-y-2"><FieldLabel htmlFor="notes" help="Internal. Never returned by public check or download endpoints.">Internal notes</FieldLabel><Textarea id="notes" name="notes" defaultValue={values.notes} maxLength={4000}/></div>
+    {error && <p role="alert" className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">{error}</p>}
+    <div className="flex gap-2"><Button type="submit" disabled={busy || !apps.length}>{busy ? "Saving…" : submitLabel}</Button><Button asChild variant="outline"><Link to={cancelTo}>Cancel</Link></Button></div>
+  </Form>
 }

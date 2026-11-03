@@ -102,7 +102,7 @@ export const serializeStatus = (s: StatusDef) => ({
   is_default: s.is_default,
 })
 
-export const serializeActivity = (a: Activity) => ({ at: iso(a.at), event: a.event, status: a.status, domain: a.domain, ip: a.ip, detail: a.detail })
+export const serializeActivity = (a: Activity) => ({ app_id: a.app_id ?? null, tag: a.tag ?? null, at: iso(a.at), event: a.event, status: a.status, domain: a.domain, ip: a.ip, detail: a.detail })
 
 export const serializeActivation = (a: Activation) => ({ domain: a.domain, version: a.version, first_seen_at: iso(a.first_seen_at), last_seen_at: iso(a.last_seen_at), check_count: a.check_count, last_ip: a.last_ip })
 

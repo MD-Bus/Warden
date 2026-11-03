@@ -1,3 +1,4 @@
+import type { AttachmentFacts } from "#/lib/entitlements"
 import { Link, useNavigate } from "react-router"
 import { ArrowDown, ArrowUp } from "lucide-react"
 import { LicenseStatusBadge } from "#/components/status-badge"
@@ -8,6 +9,8 @@ import { cn } from "#/lib/utils"
 
 export type LicenseRowData = {
   id: string
+  apps?: AttachmentFacts[]
+  expiry_mode?: string
   name: string
   customer_name: string
   customer_email: string
@@ -107,7 +110,7 @@ export function LicensesTable({ licenses, showApp = true, empty = "No licence ma
               </TableCell>
               {showApp && (
                 <TableCell className="hidden lg:table-cell">
-                  {l.app_id ? (
+                  {l.apps?.length ? <div className="space-y-1">{l.apps.map((e) => <Link key={e.tag} to={`/apps/${e.app_id}`} className="block hover:underline">{e.app_name} <span className="font-mono text-xs text-muted-foreground">{e.tag}</span></Link>)}</div> : l.app_id ? (
                     <Link to={`/apps/${l.app_id}`} className="hover:underline">
                       {l.app_name}
                     </Link>
@@ -117,10 +120,10 @@ export function LicensesTable({ licenses, showApp = true, empty = "No licence ma
                 </TableCell>
               )}
               <TableCell>
-                <LicenseStatusBadge license={l} />
+                {l.apps?.length ? <span className="text-sm">{l.apps.filter((e) => e.valid).length} / {l.apps.length} apps valid</span> : <LicenseStatusBadge license={l} />}
               </TableCell>
               <TableCell className="hidden md:table-cell">
-                <Expiry ts={l.expires_at} />
+                {l.expiry_mode === "separate" ? <div className="space-y-2">{l.apps?.map((e) => <div key={e.tag}><span className="font-mono text-xs text-muted-foreground">{e.tag}</span><Expiry ts={e.expires_at} /></div>)}</div> : <Expiry ts={l.expires_at} />}
               </TableCell>
               <TableCell className="hidden tabular-nums md:table-cell">{l.max_sites === null ? (l.sites_used ?? 0) : `${l.sites_used ?? 0} / ${l.max_sites}`}</TableCell>
               <TableCell className="hidden text-muted-foreground sm:table-cell">

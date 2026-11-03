@@ -147,7 +147,7 @@ export async function setStatusOrder(env: Env, scope: StatusScope, keys: string[
 
 /** SQL condition (table alias l) for the licences whose statuses come from the scope: the licences of an app, or one standalone licence. */
 function licenseFilter(scope: StatusScope): { sql: string; args: string[] } {
-  return "app" in scope ? { sql: "l.app_id = ?", args: [scope.app] } : { sql: "l.id = ?", args: [scope.license] }
+  return "app" in scope ? { sql: "l.app_id = ? AND l.expiry_mode = 'legacy'", args: [scope.app] } : { sql: "l.id = ?", args: [scope.license] }
 }
 
 /** SQL condition (aliases f for files, l for the licence a file belongs to) for the files whose release rules use the scope's statuses. */
@@ -163,20 +163,31 @@ export async function statusUsage(env: Env, scope: StatusScope, key: string): Pr
   const ff = fileFilter(scope)
   const licenses = await env.DB.prepare(`SELECT COUNT(*) AS c FROM licenses l WHERE l.status = ? AND ${lf.sql}`).bind(key, ...lf.args).first<{ c: number }>()
   const files = await env.DB.prepare(`SELECT COUNT(*) AS c FROM files f LEFT JOIN licenses l ON l.id = f.license_id WHERE instr(',' || f.statuses || ',', ?) > 0 AND ${ff.sql}`).bind(`,${key},`, ...ff.args).first<{ c: number }>()
-  return { licenses: licenses?.c ?? 0, files: files?.c ?? 0 }
+  const attached = "app" in scope ? await env.DB.prepare("SELECT COUNT(DISTINCT license_id) AS c FROM license_apps WHERE app_id=? AND status=?").bind(scope.app,key).first<{c:number}>() : null
+  return { licenses: (licenses?.c ?? 0) + (attached?.c ?? 0), files: files?.c ?? 0 }
 }
 
 /** Number of licences per stored status within a scope. */
 export async function statusCounts(env: Env, scope: StatusScope): Promise<Record<string, number>> {
   const lf = licenseFilter(scope)
   const rows = (await env.DB.prepare(`SELECT l.status AS status, COUNT(*) AS c FROM licenses l WHERE ${lf.sql} GROUP BY l.status`).bind(...lf.args).all<{ status: string; c: number }>()).results
-  return Object.fromEntries(rows.map((r) => [r.status, r.c]))
+  const counts=Object.fromEntries(rows.map((r) => [r.status,r.c]))
+  if("app" in scope) for(const r of (await env.DB.prepare("SELECT status,COUNT(DISTINCT license_id) AS c FROM license_apps WHERE app_id=? GROUP BY status").bind(scope.app).all<{status:string;c:number}>()).results) counts[r.status]=(counts[r.status] ?? 0)+r.c
+  return counts
 }
 
 /** Replaces a removed status key in the release rules of a scope's files. A rule left empty gets the set's default status. */
 async function rewriteFileRules(env: Env, scope: StatusScope, key: string, replacement: string | null, fallback: string): Promise<void> {
   const ff = fileFilter(scope)
   const rows = (await env.DB.prepare(`SELECT f.id AS id, f.statuses AS statuses FROM files f LEFT JOIN licenses l ON l.id = f.license_id WHERE instr(',' || f.statuses || ',', ?) > 0 AND ${ff.sql}`).bind(`,${key},`, ...ff.args).all<{ id: string; statuses: string }>()).results
+  for (const table of ["release_tracks","release_sources"] as const) {
+    const records=(await env.DB.prepare(`SELECT id,statuses FROM ${table} WHERE ${scopeColumn(scope)}=?`).bind(scopeId(scope)).all<{id:string;statuses:string}>()).results
+    for(const row of records) {
+      const keys=row.statuses.split(",").filter((k) => k && k !== key)
+      if(replacement && row.statuses.split(",").includes(key) && !keys.includes(replacement)) keys.push(replacement)
+      await env.DB.prepare(`UPDATE ${table} SET statuses=? WHERE id=?`).bind(keys.join(","),row.id).run()
+    }
+  }
   for (const row of rows) {
     const keys = row.statuses.split(",").filter((k) => k !== key)
     if (replacement && !keys.includes(replacement)) keys.push(replacement)
@@ -204,6 +215,7 @@ export async function deleteStatus(env: Env, scope: StatusScope, key: string, mo
   const lf = licenseFilter(scope)
   const statements = [env.DB.prepare(`UPDATE licenses SET status = ? WHERE status = ? AND id IN (SELECT l.id FROM licenses l WHERE ${lf.sql})`).bind(target, key, ...lf.args)]
   if ("app" in scope) statements.push(env.DB.prepare("UPDATE apps SET default_status = ? WHERE id = ? AND default_status = ?").bind(target, scope.app, key))
+  if("app" in scope) statements.push(env.DB.prepare("UPDATE license_apps SET status=? WHERE app_id=? AND status=?").bind(target,scope.app,key))
   await env.DB.batch(statements)
   await rewriteFileRules(env, scope, key, moveTo, target)
   await writeScope(env, scope, remaining)
@@ -250,6 +262,7 @@ export async function resetStatuses(env: Env, scope: StatusScope, mapping: Recor
   for (const s of own) {
     const to = target(s.key)
     if (to !== s.key) statements.push(env.DB.prepare(`UPDATE licenses SET status = ? WHERE status = ? AND id IN (SELECT l.id FROM licenses l WHERE ${lf.sql})`).bind(to, s.key, ...lf.args))
+    if("app" in scope && to !== s.key) statements.push(env.DB.prepare("UPDATE license_apps SET status=? WHERE app_id=? AND status=?").bind(to,scope.app,s.key))
   }
   if ("app" in scope) {
     const row = await env.DB.prepare("SELECT default_status FROM apps WHERE id = ?").bind(scope.app).first<{ default_status: string }>()

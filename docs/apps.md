@@ -1,75 +1,60 @@
-# Apps
+# Apps and licences
 
-An **app** is a product you license to many customers, for example a plugin or a theme. Licences can belong to an app. A licence without an app is a **standalone** licence, for a single customer or a custom project.
+An **app** is a product or a custom project: a parent theme, a child theme, a plugin, or a website delivered to one customer. Apps own status definitions, release tracks, files and repository connections.
 
-![An app page](screenshots/app.jpg)
+A **licence** gives a customer access to one or more apps through one key. Each app attachment has a **tag**, a selected status, and optionally its own expiry date. The licence holds the customer details, allowed domains and shared site limit.
 
-| | Standalone licence | Licence under an app |
+## Example: parent and child themes
+
+| Tag | Attached app | Selected status |
 |---|---|---|
-| Starts with | The values you enter | The app's defaults (duration, status, maximum sites, public message) |
-| Files | Its own files | Its own files and every file shared by the app |
-| Typical use | A custom website built for one client | A product sold to many customers |
+| `parent-theme` | Harbor Theme | Active |
+| `child-theme` | Harbor Studio Child | Completed |
+| `booking` | Atlas Booking | Active |
+
+The customer's site stores one licence key. It checks `?tag=parent-theme` for the parent theme and `?tag=child-theme` for its child theme. Other customers can attach different child-theme apps under the same tag.
+
+Tags are unique within a licence. They start with a lowercase letter and contain up to 48 lowercase letters, digits, underscores or hyphens. Keep them stable after a site starts using them. Tags identify app attachments; they are separate from Git version tags and release tracks. An app may appear under several different tags, with independent access settings.
 
 ## Creating an app
 
-Dashboard: **Apps**, **New app**. API: `POST /api/v1/apps`.
+Open **Apps → New app**. Set its name, identifier, description and optional defaults. Customise its status definitions there if needed. A custom project uses the same app form as a shared product.
 
-| Field | Meaning |
+An app's default status, duration and public message initialise a new attachment. Duration is used for separate expiry dates. Issuing from an app also prefills the shared expiry and site limit. When attaching several apps from the licence form, choose the shared expiry and site limit explicitly. Grace periods apply live unless overridden on an attachment or licence.
+
+## Creating a licence
+
+Open **Licences → New licence**. Enter customer details and attach apps. For each row, enter a tag, select an app, then choose one of that app's statuses. Up to 50 app attachments are supported.
+
+| Expiry mode | Meaning |
 |---|---|
-| Name and identifier | The identifier (slug) is generated from the name and used in the API, for example `harbor-theme` |
-| Description | Shown on the app page |
-| Default status | The status a new licence starts with, from the app's statuses. For example a status that holds licences until payment is confirmed |
-| Default duration (days) | A new licence expires this many days after it is issued. Empty: no expiry |
-| Default maximum sites | How many sites one licence may be used on. Empty: unlimited |
-| Default public message | The message new licences return to sites |
-| Grace period (days) | Days the app's licences stay valid after their expiry date. Unlike the defaults, it applies to every licence of the app, existing and new, unless a licence has a setting of its own. Empty: none. See [statuses.md](statuses.md#grace-period) |
+| Shared expiry | One date on the licence applies to every attached app. Renewal extends all of them. |
+| Separate expiry | Each attachment has its own date. Renewal names the tag to extend. |
 
-The defaults are a starting point. Every value can be changed on each licence.
+An empty date means no expiry. Statuses without an expiry rule, such as Completed, ignore the date. Shared expiry does not merge statuses or grace periods: apps can have different statuses and different effective grace periods.
 
-## Statuses
+Switching from shared to separate in the dashboard copies the shared date into each row. Switching back requires choosing a shared date, or explicitly leaving it empty for no expiry. Review the dates before saving.
 
-An app uses the built-in default statuses unless you customise them on the app page, and a single licence can customise its own. See [statuses.md](statuses.md).
+## Licence templates
 
-## Issuing licences
+Open **Licence templates** to define reusable tag slots, a default expiry mode, and optional default apps. Slots can be required or optional. Required slots need an app when issuing a licence; optional empty slots are skipped. Selecting an app supplies its status choices.
 
-Dashboard: open the app, **Issue licence**. The form opens with the app's defaults filled in. API: `POST /api/v1/apps/{app}/licenses`, or `POST /api/v1/licenses` with `"app": "harbor-theme"`.
+For a WordPress template, prefill `parent-theme` with Harbor Theme and leave `child-theme` ready for the customer's custom app. Template changes affect future licences only. Existing licences keep their tags, apps and settings.
 
-```bash
-curl -X POST https://<worker>/api/v1/licenses \
-  -H "Authorization: Bearer $WARDEN_KEY" -H "Content-Type: application/json" \
-  -d '{"app":"harbor-theme","name":"Harbor Studio website","customer_name":"Harbor Studio","customer_email":"billing@harborstudio.com","external_ref":"order-1042"}'
-```
+## Shared site limits and reported versions
 
-`external_ref` makes the call idempotent: sending the same reference again returns the first licence. Use your order or invoice number so a retried request or a repeated payment webhook never issues two licences.
+Allowed domains and the site limit apply to the entire licence. Parent and child themes checking from `harborstudio.com` consume one slot. Versions are recorded independently for each tag on that domain.
 
-Licences can be moved to another app (or made standalone) by editing them, or with `PATCH /api/v1/licenses/{id}` and `{"app": "other-app"}`.
+A valid check registers the site. A new domain beyond the limit returns `site_limit_reached`; existing domains keep their slot. **Release site** frees the domain for every attachment and clears its per-tag version reports. The site can register again on its next valid check.
 
-## Sites and the site limit
+## Releases and deletion
 
-A licence can limit how many different sites (domains) may use it. Each site registers automatically on its first check:
+Upload releases and connect repositories on the app. Its selected status determines which track an attachment receives. See [releases.md](releases.md).
 
-1. The customer's site checks the licence with its domain: `GET /check/<key>?domain=harborstudio.com`.
-2. If the licence has room, the domain is registered and the check succeeds.
-3. When the limit is reached, a check from a new domain is invalid, with `site_limit_reached`. Domains that are already registered keep working.
-4. On the licence page, **Release site** frees a slot, for example when the customer moves to a new domain. The old site can register again if there is room.
+Removing an attachment revokes that tag's access and deletes its reported versions. Deleting a licence leaves its apps and their releases intact. Regenerating a key invalidates the previous key for every attachment.
 
-A licence with a site limit requires the domain in every check (and download). A licence without a limit does not.
+An app cannot be deleted while any licence attaches it, a template selects it, or a migrated project app inherits its releases. Remove those references first.
 
-This can be combined with **Allowed domains**, a fixed list that restricts a licence to specific domains. Use the list for custom deals, and the site limit for products.
+## Existing installations
 
-The site limit relies on the domain the site reports, so it is a licensing control, not a technical barrier (see [Security.md](../Security.md)).
-
-## Shared releases
-
-Files uploaded to an app are shared by all of its licences: upload a version once and every customer can download it. Releases are grouped in the app's **tracks**, each serving a set of statuses, for example Updates for Active licences and a Final build for Completed ones ([releases.md](releases.md#tracks)). A licence of the app can have tracks of its own, which replace the app's tracks for the statuses they serve.
-
-- A licence's download list (`GET /download/<key>`) contains its own files and the app's files, marked with their `source`.
-- A track can receive its releases from a GitHub repository: connect it from the track on the app's Releases tab and every version tag is published into the track ([repositories.md](repositories.md)).
-- The `latest` field points to the latest release of the track that serves the licence's current status. A site that sends its version with its check is told directly whether an update is waiting ([releases.md](releases.md)).
-- The versions the app's sites report are shown on the app page and returned by `GET /api/v1/apps/{app}/versions`. A site counts as behind when its version is older than the latest release its own licence is offered.
-- Downloads are counted per file and written to the activity log of the licence that downloaded them.
-- A file shared by an app is visible only to licences of that app.
-
-## Deleting
-
-An app can be deleted only when it has no licences, so a licence never loses its app by accident. Delete the licences, or move them to another app, first. Deleting an app also deletes its files. Deleting a licence leaves the app's files untouched.
+Migration 0016 converts standalone licences into project apps and attaches them under `default`. Existing keys and file links keep working. A licence with custom releases gets a project app that retains its overrides and inherits the original app's releases for other statuses. See [upgrade-notes.md](upgrade-notes.md).

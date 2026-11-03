@@ -80,7 +80,7 @@ export default function Licenses({ loaderData }: Route.ComponentProps) {
       <div className="space-y-5 p-4 pt-0 lg:px-6">
         <PageTitle
           title="Licences"
-          description={`${licenses.length}${truncated ? "+" : ""} licence${licenses.length === 1 ? "" : "s"} across ${apps.length} app${apps.length === 1 ? "" : "s"} and standalone projects.`}
+          description={`${licenses.length}${truncated ? "+" : ""} licence${licenses.length === 1 ? "" : "s"} across ${apps.length} app${apps.length === 1 ? "" : "s"}.`}
           actions={
             <>
               {licenses.length > 0 && (
@@ -142,7 +142,6 @@ export default function Licenses({ loaderData }: Route.ComponentProps) {
               <div className="w-48">
                 <NativeSelect value={filter.app} onChange={(e) => update({ app: e.target.value })} aria-label="Filter by app">
                   <option value="">All apps</option>
-                  <option value="none">Standalone only</option>
                   {apps.map((a) => (
                     <option key={a.id} value={a.id}>
                       {a.name}
@@ -173,6 +172,7 @@ export default function Licenses({ loaderData }: Route.ComponentProps) {
               )}
             </div>
 
+            <p className="text-xs text-muted-foreground">Valid means every attached app is valid. Invalid includes licences with any invalid app. Expiring and silent match any attached app.</p>
             <LicensesTable
               licenses={shown}
               sort={sort}

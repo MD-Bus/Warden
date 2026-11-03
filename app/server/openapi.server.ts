@@ -148,6 +148,29 @@ export function openApiSpec(origin: string) {
     servers: [{ url: `${origin}/api/v1` }],
     security: secured,
     paths: {
+      "/license-templates": {
+        get: { summary: "Licence templates", parameters: pageParams, responses: { 200: { description: "{ data: LicenseTemplate[], next }", content: { "application/json": { schema: { type:"object", properties:{data:{type:"array",items:{$ref:"#/components/schemas/LicenseTemplate"}},next:{type:["string","null"]}} } } } } } },
+        post: { summary: "Create a licence template (manage)", requestBody: body({$ref:"#/components/schemas/LicenseTemplateInput"}), responses:{201:ok("Template","LicenseTemplate"),403:err,409:err,422:err} },
+      },
+      "/license-templates/{template}": {
+        parameters:[{name:"template",in:"path",required:true,schema:{type:"string"}}],
+        get:{summary:"A licence template",responses:{200:ok("Template","LicenseTemplate"),404:err}},
+        patch:{summary:"Edit a template for future licences (manage)",requestBody:body({$ref:"#/components/schemas/LicenseTemplateInput"}),responses:{200:ok("Template","LicenseTemplate"),403:err,404:err,409:err,422:err}},
+        delete:{summary:"Delete a template, preserving existing licences (full)",responses:{200:{description:"{ deleted: true, id }"},403:err,404:err}},
+      },
+      "/check/{key}": {
+        servers:[{url:origin}], security:[], parameters:[{name:"key",in:"path",required:true,schema:{type:"string"}},{name:"tag",in:"query",schema:{type:"string"},description:"App attachment tag. Omit to check all apps. A multi-app response has apps and no top-level valid, status or update."},{name:"domain",in:"query",schema:{type:"string"}},{name:"version",in:"query",schema:{type:"string"},description:"Requires tag when the licence has several apps."},{name:"channel",in:"query",schema:{enum:["stable","beta"]}},{name:"nonce",in:"query",schema:{type:"string",pattern:"^[A-Za-z0-9._~-]{8,64}$"}}],
+        get:{summary:"Signed licence check by tag or for every app",responses:{200:{description:"A CheckResult, or { license_key, domain, nonce, checked_at, apps: CheckResult[] }. JSON is signed with X-Warden-Signature-Ed25519 over the raw body; X-Warden-Key-Id identifies the key."},403:err,404:err,422:err,429:err}},
+        post:{summary:"Check with JSON fields; versions can map each tag to its installed version",requestBody:body({type:"object",properties:{tag:{type:"string"},domain:{type:"string"},nonce:{type:"string"},version:{type:"string"},channel:{enum:["stable","beta"]},versions:{type:"object",additionalProperties:{type:"string"}}}}),responses:{200:{description:"Same signed response as GET"},404:err,422:err,429:err}},
+      },
+      "/download/{key}": {
+        servers:[{url:origin}],security:[],parameters:[{name:"key",in:"path",required:true,schema:{type:"string"}},{name:"tag",in:"query",schema:{type:"string"}},{name:"domain",in:"query",schema:{type:"string"}},{name:"channel",in:"query",schema:{enum:["stable","beta"]}}],
+        get:{summary:"Signed download list, grouped by app when tag is omitted",responses:{200:{description:"Selected app: { tag, app, valid, status, latest, files }. Several apps: { license_key, checked_at, apps: [...] }. Each file has a tag-scoped download_url."},404:err,429:err}},
+      },
+      "/download/{key}/{fileId}": {
+        servers:[{url:origin}],security:[],parameters:[{name:"key",in:"path",required:true,schema:{type:"string"}},{name:"fileId",in:"path",required:true,schema:{type:"string"}},{name:"tag",in:"query",schema:{type:"string"}},{name:"domain",in:"query",schema:{type:"string"}}],
+        get:{summary:"Download after evaluating the selected app's status and domain rules",responses:{200:{description:"File bytes with X-Warden-Sha256 and X-Warden-Release-Signature"},403:err,404:err,410:err,429:err}},
+      },
       "/me": { get: { summary: "Who the key belongs to", responses: { 200: { description: "Key name and scope" }, 401: err } } },
       "/stats": { get: { summary: "Licence statistics", responses: { 200: { description: "{ total, valid, invalid, expiring_within_14_days, not_checked_for_3_days, by_status }" }, 401: err } } },
       "/signing-key": {
@@ -274,14 +297,14 @@ export function openApiSpec(origin: string) {
       },
       "/licenses/{id}/status": {
         parameters: [idParam],
-        post: { summary: "Set the status", requestBody: body({ type: "object", required: ["status"], properties: { status: { type: "string", description: "A status key of the statuses that apply to the licence" } } }), responses: { 200: ok("Updated"), 403: err, 404: err, 422: err } },
+        post: { summary: "Set the status", requestBody: body({ type: "object", required: ["status"], properties: { tag:{type:"string",description:"Required for tagged-app licences."}, status: { type: "string", description: "A status key of the statuses that apply to the licence" } } }), responses: { 200: ok("Updated"), 403: err, 404: err, 422: err } },
       },
       "/licenses/{id}/renew": {
         parameters: [idParam],
         post: {
           summary: "Renew",
           description: "`days` moves the end date forward (from the current end date, or from today if it has passed). `until` sets the end date. A licence that had expired becomes active again; a suspended or disabled one keeps its status.",
-          requestBody: body({ type: "object", properties: { days: { type: "integer", minimum: 1, maximum: 3650 }, until: { type: "string", description: "YYYY-MM-DD or ISO date-time, in the future" } } }),
+          requestBody: body({ type: "object", properties: { tag:{type:"string",description:"Required in separate expiry mode; omit in shared mode."}, days: { type: "integer", minimum: 1, maximum: 3650 }, until: { type: "string", description: "YYYY-MM-DD or ISO date-time, in the future" } } }),
           responses: { 200: ok("Renewed"), 403: err, 404: err, 422: err },
         },
       },
@@ -399,13 +422,20 @@ export function openApiSpec(origin: string) {
       securitySchemes: { bearer: { type: "http", scheme: "bearer", description: "API key, wk_..." } },
       responses: { Error: { description: "Error", content: { "application/json": { schema: { type: "object", properties: { error: { type: "object", properties: { code: { type: "string" }, message: { type: "string" } } } } } } } } },
       schemas: {
+        LicenseAppInput:{type:"object",required:["tag"],properties:{tag:{type:"string",pattern:"^[a-z][a-z0-9_-]{0,47}$"},app:{type:"string",description:"App id or slug. Required unless supplied by this template slot."},status:{type:"string",description:"Selected status from the app's definitions; defaults to the app default."},expires_at:{type:["string","null"],description:"Used in separate expiry mode; null means no expiry."},grace_days:{type:["integer","null"],minimum:0,maximum:365},message:{type:"string",maxLength:300}}},
+        LicenseApp:{type:"object",properties:{id:{type:"string"},tag:{type:"string"},app:{type:"object",properties:{id:{type:"string"},slug:{type:"string"},name:{type:"string"}}},status:{type:"string"},stored_status:{type:"string"},valid:{type:"boolean"},expires_at:{type:["string","null"]},grace_days:{type:["integer","null"]},effective_grace_days:{type:"integer"},grace_ends_at:{type:["string","null"]},message:{type:"string"},last_check_at:{type:["string","null"]},check_count:{type:"integer"},check_url:{type:"string"}}},
+        LicenseTemplateInput:{type:"object",properties:{name:{type:"string",minLength:1,maxLength:80},description:{type:"string",maxLength:500},expiry_mode:{enum:["shared","separate"]},slots:{type:"array",minItems:1,maxItems:50,items:{type:"object",required:["tag"],properties:{tag:{type:"string",pattern:"^[a-z][a-z0-9_-]{0,47}$"},app:{type:["string","null"]},required:{type:"boolean",default:true}}}}}},
+        LicenseTemplate:{allOf:[{$ref:"#/components/schemas/LicenseTemplateInput"},{type:"object",properties:{id:{type:"string"},created_at:{type:"integer"},updated_at:{type:"integer"}}}]},
         LicenseInput: {
           type: "object",
           properties: {
+            apps:{type:"array",minItems:1,maxItems:50,description:"Complete attachment list on PATCH; omitted preserves the list. Removing a tag revokes its access and removes its reported versions.",items:{$ref:"#/components/schemas/LicenseAppInput"}},
+            expiry_mode:{enum:["shared","separate"],description:"One licence date, or independent app dates. Switching to shared requires an explicit expires_at, including null for no expiry."},
+            template:{type:"string",description:"Template id, create only. Required tags must have an app; default apps may be omitted from each submitted slot."},
             name: { type: "string", maxLength: 120 },
             customer_name: { type: "string", maxLength: 120 },
             customer_email: { type: "string", maxLength: 200 },
-            app: { type: ["string", "null"], description: "App id or slug, or null for a standalone licence. On create, the app's defaults fill every field not sent" },
+            app: { deprecated:true, type: ["string", "null"], description: "App id or slug, or null for a standalone licence. On create, the app's defaults fill every field not sent" },
             max_sites: { type: ["integer", "null"], minimum: 1, description: "Maximum number of distinct sites (domains) that may use the licence. null for unlimited" },
             grace_days: { type: ["integer", "null"], minimum: 0, maximum: 365, description: "Days the licence stays valid after its expiry date. null: its app's setting; 0: none" },
             status: { type: "string", description: "A status key of the licence's status set (GET /statuses, or GET /apps/{app}/statuses). Defaults to the default status of the set" },
@@ -481,6 +511,8 @@ export function openApiSpec(origin: string) {
         License: {
           type: "object",
           properties: {
+            expiry_mode:{enum:["shared","separate"],description:"Tagged-app licences have no top-level status or valid. Read each apps entry."},
+            apps:{type:"array",items:{$ref:"#/components/schemas/LicenseApp"}},
             id: { type: "string" }, name: { type: "string" }, customer_name: { type: "string" }, customer_email: { type: "string" }, app: { type: ["object", "null"], properties: { id: { type: "string" }, slug: { type: "string" }, name: { type: "string" } } }, max_sites: { type: ["integer", "null"] }, sites_used: { type: "integer" }, key: { type: "string" }, check_url: { type: "string" },
             status: { type: "string", description: "The status reported to sites: the stored status, or the status its expiry rule points to once the expiry date and any grace period have passed" },
             stored_status: { type: "string" }, valid: { type: "boolean", description: "true when the reported status is valid (grants_access; by default Active and Completed)" }, expires_at: { type: ["string", "null"] },

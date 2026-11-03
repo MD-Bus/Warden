@@ -14,6 +14,7 @@ export default [
   layout("routes/app.tsx", [
     route("overview", "routes/overview.tsx"),
     route("licenses", "routes/licenses.tsx"),
+    route("license-templates", "routes/license-templates.tsx"),
     route("licenses/new", "routes/licenses.new.tsx"),
     route("licenses/:licenseId", "routes/licenses.$licenseId.tsx"),
     route("licenses/:licenseId/edit", "routes/licenses.$licenseId.edit.tsx"),

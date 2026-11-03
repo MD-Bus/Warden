@@ -1,3 +1,4 @@
+import { contextsForLicense, type AppContext } from "./entitlements.server"
 import { evaluateFileAccess, type FileAccess } from "../lib/files"
 import { clientIp, reportUnknownKey } from "./guard.server"
 import { buildCheckResponse, KEY_PATTERN, normalizeDomain, type CheckResponse } from "../lib/license"
@@ -85,7 +86,7 @@ export async function visibleFiles(env: Env, license: License, domain: string | 
       statuses: rule.statuses,
       check_domain: rule.check_domain,
       available: accessFor(license, f, domain, check, now, set).allowed,
-      download_url: `${origin}/download/${license.license_key}/${f.id}`,
+      download_url: `${origin}/download/${license.license_key}/${f.id}${license.tag ? `?tag=${encodeURIComponent(license.tag)}` : ""}`,
     }
   })
 }
@@ -102,7 +103,7 @@ export async function releaseSummary(f: VisibleFile, key: SigningKey, domain: st
     sha256: f.sha256 || null,
     signature: await signRelease(key, f.sha256),
     released_at: new Date(f.uploaded_at).toISOString(),
-    download_url: domain ? `${f.download_url}?domain=${encodeURIComponent(domain)}` : f.download_url,
+    download_url: domain ? `${f.download_url}${f.download_url.includes("?") ? "&" : "?"}domain=${encodeURIComponent(domain)}` : f.download_url,
   }
 }
 
@@ -139,6 +140,30 @@ const publicEntry = async (f: VisibleFile, key: SigningKey) => ({
  * file requires it, the requesting domain is allowed for the licence.
  */
 export async function handleDownload(request: Request, env: Env, ctx: ExecutionContext, key: string, fileId: string | null): Promise<Response> {
+  if (request.method === "OPTIONS") return legacyDownload(request,env,ctx,key,fileId)
+  const license = KEY_PATTERN.test(key) ? await getLicenseByKey(env,key) : null
+  if (!license?.expiry_mode || license.expiry_mode === "legacy") return legacyDownload(request,env,ctx,key,fileId)
+  const url = new URL(request.url), tag = url.searchParams.get("tag"), signing = await getSigningKey(env)
+  if (request.method !== "GET" && request.method !== "HEAD") return reply(signing,{error:"Method not allowed. Use GET."},405)
+  const all = await contextsForLicense(env,license)
+  const selected = tag === null ? all : all.filter((c) => c.tag === tag)
+  if (!selected.length) return reply(signing,{valid:false,status:"attachment_not_found",tag,license_key:key,message:"No app has that tag on this licence."},404)
+  if (fileId) {
+    const matching=[]
+    for (const c of selected) if (await getFileForLicense(env,c,fileId)) matching.push(c)
+    if(matching.length>1 && tag === null) return reply(signing,{error:"Send tag to select which attachment authorizes this file."},422)
+    if(matching.length) return legacyDownload(request,env,ctx,key,fileId,matching[0])
+    return reply(signing,{error:"File not found for this licence and tag."},404)
+  }
+  if (selected.length === 1) return legacyDownload(request,env,ctx,key,fileId,selected[0])
+  const apps = await Promise.all(selected.map(async (c) => {
+    const response = await legacyDownload(request,env,ctx,key,null,c)
+    return response.json()
+  }))
+  return reply(signing,{license_key:key,checked_at:new Date().toISOString(),apps},200)
+}
+
+async function legacyDownload(request: Request, env: Env, ctx: ExecutionContext, key: string, fileId: string | null, context?: AppContext): Promise<Response> {
   if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: { ...CORS, "access-control-allow-methods": "GET" } })
   const signing = await getSigningKey(env)
   if (request.method !== "GET" && request.method !== "HEAD") return reply(signing, { error: "Method not allowed. Use GET." }, 405)
@@ -148,7 +173,7 @@ export async function handleDownload(request: Request, env: Env, ctx: ExecutionC
   const domain = domainParam ? normalizeDomain(domainParam) : null
   const now = Date.now()
 
-  const license = KEY_PATTERN.test(key) ? await getLicenseByKey(env, key) : null
+  const license = context ?? (KEY_PATTERN.test(key) ? await getLicenseByKey(env, key) : null)
   if (!license) {
     reportUnknownKey(env, ctx, request)
     return reply(signing, { valid: false, status: "unknown", message: "Unknown licence." }, 404)
@@ -163,7 +188,7 @@ export async function handleDownload(request: Request, env: Env, ctx: ExecutionC
     const channel: Channel = isChannel(channelParam) ? channelParam : "stable"
     const entries = await visibleFiles(env, license, domain, check, now, set, url.origin)
     const latest = latestRelease(entries.filter((e) => e.available), channel)
-    return reply(signing, { valid: check.valid, status: check.status, message: check.message, app: check.app, license_key: license.license_key, checked_at: check.checked_at, latest: latest ? await releaseSummary(latest, signing) : null, files: await Promise.all(entries.map((e) => publicEntry(e, signing))) }, 200)
+    return reply(signing, { valid: check.valid, status: check.status, message: check.message, tag: context?.tag, app: context ? { id: context.app_id, slug: context.app_slug, name: context.app_name } : check.app, license_key: license.license_key, checked_at: check.checked_at, latest: latest ? await releaseSummary(latest, signing) : null, files: await Promise.all(entries.map((e) => publicEntry(e, signing))) }, 200)
   }
 
   const file = /^fil_[a-z0-9]+$/.test(fileId) ? await getFileForLicense(env, license, fileId) : null
@@ -205,7 +230,7 @@ export async function handleDownload(request: Request, env: Env, ctx: ExecutionC
 
 async function logDownload(env: Env, license: License, file: LicenseFile, status: string, domain: string | null, ip: string | null, now: number, granted: boolean, set: StatusSet) {
   const detail = granted ? `Downloaded: ${file.name}` : `Download denied: ${file.name} (available when ${describeStatusKeys(releaseRule(file, set).statuses, set)})`
-  const statements = [env.DB.prepare("INSERT INTO activity (license_id, at, event, status, domain, detail, ip) VALUES (?, ?, 'download', ?, ?, ?, ?)").bind(license.id, now, status, domain, detail, ip)]
+  const statements = [env.DB.prepare("INSERT INTO activity (license_id, at, event, status, domain, detail, ip, app_id, tag) VALUES (?, ?, 'download', ?, ?, ?, ?, ?, ?)").bind(license.id, now, status, domain, detail, ip, license.app_id, license.tag ?? null)]
   if (granted) statements.push(env.DB.prepare("UPDATE files SET download_count = download_count + 1, last_download_at = ? WHERE id = ?").bind(now, file.id))
   await env.DB.batch(statements)
 }

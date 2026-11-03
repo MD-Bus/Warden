@@ -8,6 +8,7 @@ import { newId } from "./util.server"
 
 export type App = {
   id: string
+  base_app_id?: string | null
   name: string
   slug: string
   description: string
@@ -108,7 +109,9 @@ export async function updateApp(env: Env, app: App, input: AppInput): Promise<{ 
 
 /** Deletes an app and its files. Refused while the app still has licences, so no licence loses its app by accident. */
 export async function deleteApp(env: Env, app: App): Promise<{ ok: true } | { error: string }> {
-  const count = await env.DB.prepare("SELECT COUNT(*) AS c FROM licenses WHERE app_id = ?").bind(app.id).first<{ c: number }>()
+  const count = await env.DB.prepare("SELECT COUNT(*) AS c FROM licenses WHERE app_id = ? OR id IN (SELECT license_id FROM license_apps WHERE app_id = ?)").bind(app.id, app.id).first<{ c: number }>()
+  if (await env.DB.prepare("SELECT 1 FROM apps WHERE base_app_id = ? LIMIT 1").bind(app.id).first()) return { error: "This app supplies inherited releases to a migrated project app. Remove that dependency before deleting it." }
+  if (await env.DB.prepare("SELECT 1 FROM license_templates, json_each(slots) WHERE json_extract(json_each.value, '$.app') = ? LIMIT 1").bind(app.id).first()) return { error: "This app is selected in a licence template. Remove it from the template first." }
   if ((count?.c ?? 0) > 0) return { error: `This app still has ${count!.c} licence${count!.c === 1 ? "" : "s"}. Delete them or move them to another app first.` }
   await deleteAppFiles(env, app.id)
   await env.DB.batch([
@@ -128,14 +131,15 @@ export async function listApps(env: Env, now = Date.now()): Promise<AppSummary[]
   const [{ results: apps }, { results: versions }, sets, { results: licenses }] = await Promise.all([
     env.DB.prepare(
       `SELECT a.*,
-        (SELECT COUNT(*) FROM licenses l WHERE l.app_id = a.id) AS licenses,
-        (SELECT COUNT(*) FROM activations x JOIN licenses l ON l.id = x.license_id WHERE l.app_id = a.id) AS sites,
+        (SELECT COUNT(*) FROM licenses l WHERE (l.expiry_mode = 'legacy' AND l.app_id = a.id) OR EXISTS (SELECT 1 FROM license_apps e WHERE e.license_id=l.id AND e.app_id=a.id)) AS licenses,
+        (SELECT COUNT(*) FROM activations x JOIN licenses l ON l.id = x.license_id WHERE (l.expiry_mode = 'legacy' AND l.app_id = a.id) OR EXISTS (SELECT 1 FROM activation_versions v JOIN license_apps e ON e.id=v.attachment_id WHERE e.license_id=l.id AND e.app_id=a.id AND v.domain=x.domain)) AS sites,
         (SELECT COUNT(*) FROM files f WHERE f.app_id = a.id) AS files
        FROM apps a ORDER BY a.name COLLATE NOCASE`
     ).all<Omit<AppSummary, "latest_version" | "valid">>(),
     env.DB.prepare("SELECT app_id, version, channel, withdrawn_at FROM files WHERE app_id IS NOT NULL AND version != '' AND withdrawn_at IS NULL").all<{ app_id: string; version: string; channel: string; withdrawn_at: null }>(),
     loadStatusSets(env),
-    env.DB.prepare("SELECT l.app_id, l.status, l.expires_at, l.grace_days, a.grace_days AS app_grace_days FROM licenses l JOIN apps a ON a.id = l.app_id").all<{
+    env.DB.prepare(`SELECT l.id, l.app_id, l.status, l.expires_at, l.grace_days, a.grace_days AS app_grace_days FROM licenses l JOIN apps a ON a.id = l.app_id WHERE l.expiry_mode='legacy' UNION ALL SELECT l.id,e.app_id,e.status,CASE WHEN l.expiry_mode='shared' THEN l.expires_at ELSE e.expires_at END,COALESCE(l.grace_days,e.grace_days),a.grace_days FROM license_apps e JOIN licenses l ON l.id=e.license_id JOIN apps a ON a.id=e.app_id`).all<{
+      id: string
       app_id: string
       status: string
       expires_at: number | null
@@ -145,8 +149,8 @@ export async function listApps(env: Env, now = Date.now()): Promise<AppSummary[]
   ])
   return apps.map((app) => {
     const set = setForApp(sets, app.id)
-    const valid = licenses.filter((l) => l.app_id === app.id && findStatus(set, effectiveStatusKey(l, set, now))?.grants_access).length
-    return { ...app, valid, latest_version: latestRelease(versions.filter((v) => v.app_id === app.id))?.version ?? null }
+    const valid = new Set(licenses.filter((l) => l.app_id === app.id && findStatus(set, effectiveStatusKey(l, set, now))?.grants_access).map((l) => l.id)).size
+    return { ...app, valid, latest_version: latestRelease(versions.filter((v) => v.app_id === app.id || v.app_id === app.base_app_id))?.version ?? null }
   })
 }
 
@@ -185,14 +189,24 @@ type ReleaseRow = { license_id: string | null; app_id: string | null; track_id: 
 export async function versionsInUse(env: Env, appId: string, now = Date.now()): Promise<VersionsInUse> {
   const [sites, releases, ownTracks, set] = await Promise.all([
     env.DB.prepare(
-      "SELECT x.license_id, x.version, l.status, l.expires_at, l.grace_days, a.grace_days AS app_grace_days, l.last_check_at, l.created_at FROM activations x JOIN licenses l ON l.id = x.license_id JOIN apps a ON a.id = l.app_id WHERE l.app_id = ?"
-    ).bind(appId).all<SiteRow>(),
+      `SELECT x.license_id, x.version, l.status, l.expires_at, l.grace_days, a.grace_days AS app_grace_days, l.last_check_at, l.created_at FROM activations x JOIN licenses l ON l.id = x.license_id JOIN apps a ON a.id = l.app_id WHERE l.app_id = ? AND l.expiry_mode='legacy'
+       UNION ALL SELECT e.license_id,v.version,e.status,CASE WHEN l.expiry_mode='shared' THEN l.expires_at ELSE e.expires_at END,COALESCE(l.grace_days,e.grace_days),a.grace_days,e.last_check_at,l.created_at FROM activation_versions v JOIN license_apps e ON e.id=v.attachment_id JOIN licenses l ON l.id=e.license_id JOIN apps a ON a.id=e.app_id WHERE e.app_id=?`
+    ).bind(appId,appId).all<SiteRow>(),
     env.DB.prepare(
       "SELECT license_id, app_id, track_id, version, channel, statuses, withdrawn_at FROM files WHERE (app_id = ? OR license_id IN (SELECT id FROM licenses WHERE app_id = ?)) AND version != '' AND withdrawn_at IS NULL ORDER BY uploaded_at DESC"
     ).bind(appId, appId).all<ReleaseRow>(),
     env.DB.prepare("SELECT license_id, statuses FROM release_tracks WHERE license_id IN (SELECT id FROM licenses WHERE app_id = ?)").bind(appId).all<{ license_id: string; statuses: string }>(),
     getStatusSetForApp(env, appId),
   ])
+  const app=await getApp(env,appId)
+  if(app?.base_app_id) {
+    const [baseFiles,own]=(await Promise.all([
+      env.DB.prepare("SELECT license_id,app_id,track_id,version,channel,statuses,withdrawn_at FROM files WHERE app_id=? AND version<>'' AND withdrawn_at IS NULL ORDER BY uploaded_at DESC").bind(app.base_app_id).all<ReleaseRow>(),
+      env.DB.prepare("SELECT statuses FROM release_tracks WHERE app_id=?").bind(appId).all<{statuses:string}>(),
+    ]))
+    const covered=new Set(own.results.flatMap((t) => t.statuses.split(",")))
+    releases.results.push(...baseFiles.results.map((f) => ({...f,app_id:appId,statuses:f.statuses.split(",").filter((s) => !covered.has(s)).join(",")})))
+  }
   const appReleases = releases.results.filter((r) => r.app_id === appId)
   const latestOverall = latestRelease(appReleases)?.version ?? null
 
@@ -201,7 +215,8 @@ export async function versionsInUse(env: Env, appId: string, now = Date.now()): 
   for (const t of ownTracks.results) ownKeys.set(t.license_id, new Set([...(ownKeys.get(t.license_id) ?? []), ...t.statuses.split(",").filter(Boolean)]))
   const latestFor = new Map<string, string | null>()
   const latestOf = (site: SiteRow) => {
-    if (latestFor.has(site.license_id)) return latestFor.get(site.license_id)!
+    const cacheKey=`${site.license_id}:${site.status}`
+    if (latestFor.has(cacheKey)) return latestFor.get(cacheKey)!
     const status = effectiveStatusKey(site, set, now)
     const replaced = ownKeys.get(site.license_id) ?? new Set<string>()
     const offered = releases.results.filter((r) => {
@@ -210,7 +225,7 @@ export async function versionsInUse(env: Env, appId: string, now = Date.now()): 
       return r.app_id === appId && keys.includes(status) && !(r.track_id && replaced.has(status))
     })
     const latest = latestRelease(offered)?.version ?? null
-    latestFor.set(site.license_id, latest)
+    latestFor.set(cacheKey, latest)
     return latest
   }
 

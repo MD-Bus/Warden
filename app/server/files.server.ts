@@ -83,12 +83,18 @@ export async function listFilesForLicense(env: Env, license: License): Promise<L
     env.DB.prepare("SELECT * FROM files WHERE license_id = ? OR app_id = ? ORDER BY uploaded_at DESC, id DESC").bind(license.id, license.app_id).all<LicenseFile>(),
     overriddenStatuses(env, license),
   ])
-  return rows.results.map((f) => forLicense(f, overridden))
+  const own = rows.results.map((f) => forLicense(f, overridden))
+  const base = license.app_id ? await env.DB.prepare("SELECT base_app_id FROM apps WHERE id = ?").bind(license.app_id).first<{base_app_id: string | null}>() : null
+  if (!base?.base_app_id) return own
+  const tracks = (await env.DB.prepare("SELECT statuses FROM release_tracks WHERE app_id = ?").bind(license.app_id).all<{statuses:string}>()).results
+  const covered = new Set(tracks.flatMap((t) => t.statuses.split(",")))
+  const inherited = (await env.DB.prepare("SELECT * FROM files WHERE app_id = ? ORDER BY uploaded_at DESC, id DESC").bind(base.base_app_id).all<LicenseFile>()).results
+  return [...own, ...inherited.map((f) => forLicense(f, covered))].sort((a,b) => b.uploaded_at - a.uploaded_at)
+
 }
 
 export async function getFileForLicense(env: Env, license: License, fileId: string): Promise<LicenseFile | null> {
-  const file = await env.DB.prepare("SELECT * FROM files WHERE id = ? AND (license_id = ? OR app_id = ?)").bind(fileId, license.id, license.app_id).first<LicenseFile>()
-  return file ? forLicense(file, await overriddenStatuses(env, license)) : null
+  return (await listFilesForLicense(env, license)).find((f) => f.id === fileId) ?? null
 }
 
 export type StoreInput = {

@@ -91,7 +91,6 @@ export default function Analytics({ loaderData }: Route.ComponentProps) {
             <div className="w-52">
               <NativeSelect value={app} onChange={(e) => update("app", e.target.value)} aria-label="Filter by app">
                 <option value="">All licences</option>
-                <option value="none">Standalone licences</option>
                 {apps.map((a) => (
                   <option key={a.id} value={a.id}>
                     {a.name}

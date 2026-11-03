@@ -8,7 +8,7 @@ A file **without** a version is an *attachment* (a manual, a notice). It can be 
 
 ## Tracks
 
-A track is what a set of licence statuses receives. An app (or a standalone licence) has one or more tracks, for example:
+A track is what a set of licence statuses receives. An app has one or more tracks, for example:
 
 | Track | For licences that are | Receives |
 |---|---|---|
@@ -21,7 +21,7 @@ A track is what a set of licence statuses receives. An app (or a standalone lice
 - **Versions are unique per track**, not per app: the Final build can be 1.0.0 while Updates is at 1.4.0, or both can be 1.4.0. Uploading a version the track already has (`v1.4.0` and `1.4.0` are the same), or changing or restoring a release to one, returns `409`; withdrawn releases do not count.
 - A track also sets the **domain check** of its releases.
 - A track receives releases by **upload**, or from a **connected repository** ([repositories.md](repositories.md)). Several tracks can be fed by one repository, told apart by tag prefix.
-- A licence of an app follows the app's tracks. It can have **tracks of its own**: for the statuses they serve, they replace the app's tracks (for example a custom build for one client); for the other statuses, the app's tracks still apply. The licence page says which track the licence receives now.
+- Each tagged app attachment follows its app's tracks, selected by its own status. Migrated custom project apps retain their old release overrides and inherit the original app's tracks for other statuses. New custom projects use an app of their own.
 - A status that no track serves receives no update.
 
 Create, rename and delete tracks on the *Releases* tab (*New track*, and the track's menu). Changing a track's statuses applies to all its releases at once. Deleting a track moves its releases to another track first.
@@ -42,14 +42,14 @@ Files without a version (attachments) are not in a track: each one keeps its own
 | **Withdrawn** | A withdrawn release is no longer offered, no longer listed, and its download returns HTTP 410. It stays on record and can be restored. Use it to pull a bad build without losing its history. |
 | **Internal notes** | For you only. Never sent to sites. |
 
-Releases live where the product lives: on the **app** for a product sold to many customers (every licence of the app sees them), or on a **licence** for a one-off project or a custom build.
+Releases live on the **app**, including for a one-off project or a custom build. Attach that app to the customer's licence under the tag the site expects.
 
 ## Offering updates through the check
 
 A site that sends its installed version with its regular check gets an `update` block back:
 
 ```
-GET https://<your-worker>/check/<licence key>?domain=harborstudio.com&version=1.3.0
+GET https://<your-worker>/check/<licence key>?tag=parent-theme&domain=harborstudio.com&version=1.3.0
 ```
 
 ```json
@@ -58,7 +58,8 @@ GET https://<your-worker>/check/<licence key>?domain=harborstudio.com&version=1.
   "status": "active",
   "message": "",
   "name": "Harbor Studio website",
-  "app": { "slug": "harbor-theme", "name": "Harbor Theme" },
+  "tag": "parent-theme",
+  "app": { "id": "app_...", "slug": "harbor-theme", "name": "Harbor Theme" },
   "expires_at": "2027-10-04T23:59:59.999Z",
   "grace_ends_at": null,
   "checked_at": "2026-10-10T09:12:44.512Z",
@@ -91,7 +92,9 @@ GET https://<your-worker>/check/<licence key>?domain=harborstudio.com&version=1.
 - The whole response, `update` included, is signed with the installation's Ed25519 key ([checking.md](checking.md#verifying-the-signature)).
 - The `update` block appears only when the site sends a valid `version`. Older site code that does not send one gets the same response as before.
 
-The same fields can be sent in a POST body: `{ "domain": "harborstudio.com", "version": "1.3.0", "channel": "beta" }`.
+Tag selects the app, its status selects a track, and channel selects stable/beta releases within that track. Versions from different apps are never compared.
+
+The same fields can be sent in a POST body: `{ "tag": "parent-theme", "domain": "harborstudio.com", "version": "1.3.0", "channel": "beta" }`.
 
 ## Knowing which versions are installed
 
@@ -163,13 +166,13 @@ openssl pkeyutl -verify -pubin -inkey warden.pem -rawin -in package.sha256 -sigf
 ```php
 function harbor_check_for_update( $key, $installed_version ) {
     $nonce = bin2hex( random_bytes( 16 ) );
-    $url   = 'https://your-worker.example/check/' . $key . '?domain=' . rawurlencode( wp_parse_url( home_url(), PHP_URL_HOST ) ) . '&version=' . rawurlencode( $installed_version ) . '&nonce=' . $nonce;
+    $url   = 'https://your-worker.example/check/' . $key . '?tag=parent-theme&domain=' . rawurlencode( wp_parse_url( home_url(), PHP_URL_HOST ) ) . '&version=' . rawurlencode( $installed_version ) . '&nonce=' . $nonce;
     $res   = wp_remote_get( $url, [ 'timeout' => 10 ] );
     if ( is_wp_error( $res ) ) { return null; } // keep the last known state
     $body = wp_remote_retrieve_body( $res );
     if ( ! warden_signed( wp_remote_retrieve_header( $res, 'x-warden-signature-ed25519' ), $body ) ) { return null; }
     $result = json_decode( $body, true );
-    if ( $result['license_key'] !== $key || $result['nonce'] !== $nonce ) { return null; }
+    if ( $result['license_key'] !== $key || $result['nonce'] !== $nonce || $result['tag'] !== 'parent-theme' ) { return null; }
     return ! empty( $result['update']['available'] ) ? $result['update']['latest'] : null;
 }
 

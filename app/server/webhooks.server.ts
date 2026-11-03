@@ -1,3 +1,4 @@
+import { serializeBundle } from "./entitlements.server"
 /**
  * Outgoing webhooks: Warden calls your URLs when something happens to a licence (docs/webhooks.md).
  *
@@ -191,7 +192,7 @@ export async function emitLicenseEvent(env: Env, type: string, license: License,
     const subscribed = await env.DB.prepare("SELECT COUNT(*) AS n FROM webhooks WHERE enabled = 1 AND instr(',' || events || ',', ?) > 0").bind(`,${type},`).first<{ n: number }>()
     if (!subscribed?.n) return 0
     const set = await getStatusSetForLicense(env, license)
-    return await emitEvent(env, type, { license: serializeLicense(license, await publicOrigin(env), set), ...extra }, license.id, now)
+    return await emitEvent(env, type, { license: license.expiry_mode && license.expiry_mode !== "legacy" ? await serializeBundle(env,license,await publicOrigin(env)) : serializeLicense(license, await publicOrigin(env), set), ...extra }, license.id, now)
   } catch (error) {
     console.error(`Failed to write the webhook event ${type}:`, error)
     return 0

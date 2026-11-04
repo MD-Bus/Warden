@@ -254,6 +254,8 @@ test("migration preserves keys, checksums, file ids, downloads, overrides, base 
   clearProtectionCache()
   const db = makeDb("0015_import_progress.sql"),
     env = { DB: db.DB, FILES: makeBucket().bucket } as unknown as Env
+  // The data is seeded with the current code, which writes the release limit added by 0017 (independent of 0016).
+  db.raw.exec("ALTER TABLE release_tracks ADD COLUMN keep_releases INTEGER")
   const result = await createApp(env, {
     name: "Harbor Theme",
     slug: "harbor-theme",

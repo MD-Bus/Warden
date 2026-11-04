@@ -117,3 +117,34 @@ export function sortForDisplay<T extends ReleaseLike & { uploaded_at: number }>(
     return b.uploaded_at - a.uploaded_at
   })
 }
+
+/** The largest release limit a track accepts. */
+export const MAX_KEEP_RELEASES = 1000
+
+/**
+ * Validates a track's release limit: null (or an empty string) keeps every release, otherwise a whole number from 1 to
+ * MAX_KEEP_RELEASES. Returns the value, or an error message.
+ */
+export function readKeepReleases(raw: unknown): { keep: number | null } | { error: string } {
+  if (raw === null || raw === "") return { keep: null }
+  const n = typeof raw === "string" && /^\d+$/.test(raw.trim()) ? Number(raw.trim()) : raw
+  if (typeof n !== "number" || !Number.isInteger(n) || n < 1 || n > MAX_KEEP_RELEASES) return { error: `keep_releases must be a whole number from 1 to ${MAX_KEEP_RELEASES}, or null to keep every release.` }
+  return { keep: n }
+}
+
+/**
+ * The releases a track with the limit `keep` deletes: the oldest by version beyond the newest `keep`. Withdrawn
+ * releases count towards the limit. The newest stable release and the newest beta release (the ones sites are offered)
+ * are never returned, even when the limit is lower. Attachments (files without a version) are not releases.
+ */
+export function releasesToPrune<T extends ReleaseLike & { id: string; uploaded_at: number }>(files: T[], keep: number | null): T[] {
+  if (keep === null) return []
+  const releases = sortForDisplay(files.filter((f) => f.version.trim() !== ""))
+  if (releases.length <= keep) return []
+  const kept = new Set(releases.slice(0, keep).map((f) => f.id))
+  for (const channel of CHANNELS) {
+    const offered = latestRelease(releases, channel)
+    if (offered) kept.add(offered.id)
+  }
+  return releases.filter((f) => !kept.has(f.id))
+}

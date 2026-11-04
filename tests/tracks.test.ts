@@ -3,6 +3,7 @@ import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
 import { makeBucket, makeCtx, makeDb, mockFetch, type Sent } from "./helpers/d1.ts"
 import { buildZip } from "./helpers/zip.ts"
+import { readKeepReleases, releasesToPrune } from "../app/lib/releases.ts"
 import { prefixForTag, statusConflicts, trackForStatus, trackOverlaps } from "../app/lib/tracks.ts"
 import { createApiKey } from "../app/server/api-keys.server.ts"
 import { handleApi } from "../app/server/api.server.ts"
@@ -281,3 +282,77 @@ test("a version is published once per track: upload, edit and restore refuse a d
   assert.ok("error" in restored && restored.status === 409)
 })
 
+
+test("release limit: the rule keeps the newest N and always the newest stable and beta", () => {
+  const f = (id: string, version: string, channel = "stable", withdrawn_at: number | null = null) => ({ id, version, channel, withdrawn_at, uploaded_at: 1 })
+  const list = [f("a", "1.0.0"), f("b", "1.1.0"), f("c", "1.10.0"), f("d", "1.2.0"), f("att", "")]
+  assert.deepEqual(releasesToPrune(list, null), [])
+  assert.deepEqual(releasesToPrune(list, 4), [])
+  assert.deepEqual(releasesToPrune(list, 2).map((r) => r.id), ["b", "a"], "numeric order, not text order: 1.10.0 is the newest; oldest are listed last")
+  // The newest release is a beta: the newest stable one is still kept, because stable sites are offered it.
+  const beta = [f("s1", "1.0.0"), f("s2", "1.1.0"), f("b1", "2.0.0-beta.1", "beta")]
+  assert.deepEqual(releasesToPrune(beta, 1).map((r) => r.id), ["s1"])
+  assert.deepEqual(releasesToPrune([f("w", "3.0.0", "stable", 5), f("x", "2.0.0"), f("y", "1.0.0")], 1).map((r) => r.id), ["y"], "a withdrawn release counts but is not the one offered")
+  assert.deepEqual([readKeepReleases(""), readKeepReleases(null), readKeepReleases("12"), readKeepReleases(3)], [{ keep: null }, { keep: null }, { keep: 12 }, { keep: 3 }])
+  for (const bad of [0, -1, 1.5, "abc", 1001, true]) assert.ok("error" in readKeepReleases(bad), String(bad))
+})
+
+test("release limit: uploads delete the oldest releases and their files; lowering the limit deletes at once", async () => {
+  const { bucket, objects } = makeBucket()
+  const env = { DB: makeDb().DB, FILES: bucket } as unknown as Env
+  const app = await newApp(env)
+  const owner: FileOwner = { app }
+  const updates = await createTrack(env, owner, { name: "Updates", statuses: ["active"], keep_releases: 3 })
+  assert.ok("track" in updates)
+  for (const v of ["1.0.0", "1.1.0", "1.2.0", "1.3.0", "1.10.0"]) await release(env, owner, v, "Updates")
+  assert.deepEqual((await listFiles(env, owner)).map((f) => f.version).sort(), ["1.10.0", "1.2.0", "1.3.0"])
+  assert.equal(objects.size, 3, "the files of the deleted releases are gone from storage")
+
+  // A hotfix with an old version is kept when it is added, even though it is the oldest.
+  await release(env, owner, "1.0.1", "Updates")
+  assert.ok((await listFiles(env, owner)).some((f) => f.version === "1.0.1"))
+  assert.equal((await listFiles(env, owner)).length, 4, "the new release is spared, so the track holds one more than its limit until the next upload")
+  await release(env, owner, "1.4.0", "Updates")
+  assert.deepEqual((await listFiles(env, owner)).map((f) => f.version).sort(), ["1.10.0", "1.3.0", "1.4.0"], "the next upload brings it back to the limit")
+
+  // Attachments and other tracks are untouched.
+  const manual = await storeFile(env, owner, { name: "manual.pdf", size: 3, body: new Response("pdf").body })
+  assert.ok("file" in manual)
+  const other = await createTrack(env, owner, { name: "Final build", statuses: ["completed"] })
+  assert.ok("track" in other)
+  for (const v of ["1.0.0", "1.1.0", "1.2.0", "1.3.0"]) await release(env, owner, v, "Final build")
+  const final = (await listFiles(env, owner)).filter((f) => f.track_id === other.track.id)
+  assert.equal(final.length, 4)
+
+  const lowered = await updateTrack(env, owner, (await listTracks(env, owner)).find((t) => t.name === "Updates")!, { keep_releases: 1 })
+  assert.ok("track" in lowered)
+  assert.equal(lowered.pruned, 2)
+  const left = (await listFiles(env, owner)).filter((f) => f.track_id === lowered.track.id).map((f) => f.version)
+  assert.deepEqual(left, ["1.10.0"])
+  assert.equal((await listFiles(env, owner)).some((f) => f.name === "manual.pdf"), true)
+
+  const cleared = await updateTrack(env, owner, lowered.track, { keep_releases: null })
+  assert.ok("track" in cleared)
+  assert.equal(cleared.track.keep_releases, null)
+  assert.equal(cleared.pruned, 0)
+  const invalid = await updateTrack(env, owner, cleared.track, { keep_releases: 0 })
+  assert.deepEqual([("error" in invalid) && invalid.status], [422])
+})
+
+test("release limit: the API sets it, returns it and reports how many releases were deleted", async () => {
+  const { env, ctx } = setup()
+  const full = (await createApiKey(env, "f", "full")).secret
+  const app = await newApp(env)
+  const call = async (method: string, path: string, body?: unknown) => {
+    const res = await handleApi(new Request(`${ORIGIN}/api/v1${path}`, { method, headers: { authorization: `Bearer ${full}`, "content-type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body) }), env, ctx)
+    return { status: res.status, json: (await res.json()) as any }
+  }
+  const created = await call("POST", "/apps/harbor-theme/tracks", { name: "Updates", statuses: ["active"] })
+  assert.equal(created.json.keep_releases, null)
+  for (const v of ["1.0.0", "1.1.0", "1.2.0", "1.3.0"]) await release(env, { app }, v, "Updates")
+  const patched = await call("PATCH", "/apps/harbor-theme/tracks/Updates", { keep_releases: 2 })
+  assert.deepEqual([patched.status, patched.json.keep_releases, patched.json.pruned, patched.json.releases], [200, 2, 2, 2])
+  const bad = await call("PATCH", "/apps/harbor-theme/tracks/Updates", { keep_releases: 0 })
+  assert.deepEqual([bad.status, bad.json.error.code], [422, "invalid_track"])
+  assert.equal((await call("GET", "/apps/harbor-theme/tracks/Updates")).json.keep_releases, 2)
+})

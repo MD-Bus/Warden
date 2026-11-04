@@ -1,4 +1,5 @@
 import { defaultReleaseStatuses } from "../lib/files"
+import { readKeepReleases, releasesToPrune } from "../lib/releases"
 import { describeStatusKeys, parseStatusKeys, type StatusSet } from "../lib/statuses"
 import { MAX_TRACK_NAME, trackNameError, trackOverlaps, trackStatusKeys } from "../lib/tracks"
 import type { App } from "./apps.server"
@@ -17,6 +18,8 @@ export type ReleaseTrack = {
   /** Comma-separated status keys; exclusive within the owner. */
   statuses: string
   check_domain: number
+  /** How many releases the track keeps; null keeps all. Older ones are deleted. */
+  keep_releases: number | null
   position: number
   created_at: number
   updated_at: number
@@ -47,7 +50,7 @@ export async function findTrack(env: Env, owner: TrackOwner, ref: string): Promi
   return tracks.find((t) => t.id === ref) ?? tracks.find((t) => t.name.toLowerCase() === ref.trim().toLowerCase()) ?? null
 }
 
-export type TrackInput = { name?: unknown; statuses?: unknown; check_domain?: unknown; position?: unknown }
+export type TrackInput = { name?: unknown; statuses?: unknown; check_domain?: unknown; position?: unknown; keep_releases?: unknown }
 
 function overlapError(overlaps: { status: string; track: ReleaseTrack }[], set: StatusSet): string {
   const first = overlaps[0]
@@ -56,7 +59,7 @@ function overlapError(overlaps: { status: string; track: ReleaseTrack }[], set: 
 }
 
 /** Reads and validates the fields of a track. `current` supplies the values the input leaves out. */
-async function readTrack(env: Env, owner: TrackOwner, input: TrackInput, current: ReleaseTrack | null): Promise<{ name: string; statuses: string[]; checkDomain: number; position: number } | Failure> {
+async function readTrack(env: Env, owner: TrackOwner, input: TrackInput, current: ReleaseTrack | null): Promise<{ name: string; statuses: string[]; checkDomain: number; position: number; keep: number | null } | Failure> {
   const set = await statusSetOf(env, owner)
   const rawName = input.name === undefined ? (current?.name ?? "") : input.name
   if (typeof rawName !== "string") return { error: "name must be a string.", status: 422 }
@@ -77,7 +80,9 @@ async function readTrack(env: Env, owner: TrackOwner, input: TrackInput, current
   const checkDomain = input.check_domain === undefined ? (current?.check_domain ?? 1) : input.check_domain ? 1 : 0
   if (input.position !== undefined && (!Number.isInteger(input.position) || (input.position as number) < 0)) return { error: "position must be a whole number from 0.", status: 422 }
   const position = input.position === undefined ? (current?.position ?? tracks.reduce((n, t) => Math.max(n, t.position + 1), 0)) : (input.position as number)
-  return { name: rawName.trim().slice(0, MAX_TRACK_NAME), statuses, checkDomain, position }
+  const keep = input.keep_releases === undefined ? { keep: current?.keep_releases ?? null } : readKeepReleases(input.keep_releases)
+  if ("error" in keep) return { error: keep.error, status: 422 }
+  return { name: rawName.trim().slice(0, MAX_TRACK_NAME), statuses, checkDomain, position, keep: keep.keep }
 }
 
 export async function createTrack(env: Env, owner: TrackOwner, input: TrackInput, now = Date.now()): Promise<{ track: ReleaseTrack } | Failure> {
@@ -85,20 +90,23 @@ export async function createTrack(env: Env, owner: TrackOwner, input: TrackInput
   if ("error" in read) return read
   const id = newId("trk")
   await env.DB.prepare(
-    "INSERT INTO release_tracks (id, app_id, license_id, name, statuses, check_domain, position, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    "INSERT INTO release_tracks (id, app_id, license_id, name, statuses, check_domain, position, keep_releases, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
   )
-    .bind(id, "app" in owner ? owner.app.id : null, "license" in owner ? owner.license.id : null, read.name, read.statuses.join(","), read.checkDomain, read.position, now, now)
+    .bind(id, "app" in owner ? owner.app.id : null, "license" in owner ? owner.license.id : null, read.name, read.statuses.join(","), read.checkDomain, read.position, read.keep, now, now)
     .run()
   return { track: (await getTrack(env, owner, id))! }
 }
 
-/** Changes a track. Its statuses and domain check are copied onto its releases, which is what downloads evaluate. */
-export async function updateTrack(env: Env, owner: TrackOwner, track: ReleaseTrack, input: TrackInput, now = Date.now()): Promise<{ track: ReleaseTrack } | Failure> {
+/**
+ * Changes a track. Its statuses and domain check are copied onto its releases, which is what downloads evaluate.
+ * Lowering the release limit deletes the oldest releases beyond it; `pruned` is how many were deleted.
+ */
+export async function updateTrack(env: Env, owner: TrackOwner, track: ReleaseTrack, input: TrackInput, now = Date.now()): Promise<{ track: ReleaseTrack; pruned: number } | Failure> {
   const read = await readTrack(env, owner, input, track)
   if ("error" in read) return read
   const statuses = read.statuses.join(",")
   const statements = [
-    env.DB.prepare("UPDATE release_tracks SET name = ?, statuses = ?, check_domain = ?, position = ?, updated_at = ? WHERE id = ?").bind(read.name, statuses, read.checkDomain, read.position, now, track.id),
+    env.DB.prepare("UPDATE release_tracks SET name = ?, statuses = ?, check_domain = ?, position = ?, keep_releases = ?, updated_at = ? WHERE id = ?").bind(read.name, statuses, read.checkDomain, read.position, read.keep, now, track.id),
     env.DB.prepare("UPDATE files SET statuses = ?, check_domain = ? WHERE track_id = ?").bind(statuses, read.checkDomain, track.id),
   ]
   if ("license" in owner && (statuses !== track.statuses || read.checkDomain !== track.check_domain)) {
@@ -107,7 +115,42 @@ export async function updateTrack(env: Env, owner: TrackOwner, track: ReleaseTra
     statements.push(env.DB.prepare("INSERT INTO activity (license_id, at, event, status, detail) VALUES (?, ?, 'change', ?, ?)").bind(owner.license.id, now, owner.license.status, detail))
   }
   await env.DB.batch(statements)
-  return { track: (await getTrack(env, owner, track.id))! }
+  const updated = (await getTrack(env, owner, track.id))!
+  const pruned = await pruneTrack(env, owner, updated, now)
+  return { track: updated, pruned }
+}
+
+/** The releases a track would delete now to respect its limit, oldest first. Nothing is deleted. */
+export async function releasesOverLimit(env: Env, track: Pick<ReleaseTrack, "id" | "keep_releases">, keep = track.keep_releases, spare: string | null = null) {
+  const rows = (
+    await env.DB.prepare("SELECT id, name, version, channel, withdrawn_at, uploaded_at, r2_key FROM files WHERE track_id = ? AND version <> ''")
+      .bind(track.id)
+      .all<{ id: string; name: string; version: string; channel: string; withdrawn_at: number | null; uploaded_at: number; r2_key: string }>()
+  ).results
+  return releasesToPrune(rows, keep).filter((f) => f.id !== spare).reverse()
+}
+
+/**
+ * Deletes the oldest releases of a track beyond its limit, with their files in R2. Returns how many were deleted.
+ * Called when a release is added and when the limit is lowered; a track without a limit is left alone. `spare` is a
+ * release that is never deleted: the one just added, even when its version is older than the others.
+ */
+export async function pruneTrack(env: Env, owner: TrackOwner, track: ReleaseTrack, now = Date.now(), spare: string | null = null): Promise<number> {
+  if (track.keep_releases === null) return 0
+  const doomed = await releasesOverLimit(env, track, track.keep_releases, spare)
+  if (doomed.length === 0) return 0
+  if (env.FILES) for (let i = 0; i < doomed.length; i += 1000) await env.FILES.delete(doomed.slice(i, i + 1000).map((f) => f.r2_key))
+  const statements: D1PreparedStatement[] = []
+  for (let i = 0; i < doomed.length; i += 50) {
+    const ids = doomed.slice(i, i + 50).map((f) => f.id)
+    statements.push(env.DB.prepare(`DELETE FROM files WHERE id IN (${ids.map(() => "?").join(",")})`).bind(...ids))
+  }
+  if ("license" in owner) {
+    const detail = `Releases removed by the limit of the track ${track.name} (keeps ${track.keep_releases}): ${doomed.map((f) => f.version).join(", ")}`.slice(0, 500)
+    statements.push(env.DB.prepare("INSERT INTO activity (license_id, at, event, status, detail) VALUES (?, ?, 'change', ?, ?)").bind(owner.license.id, now, owner.license.status, detail))
+  }
+  await env.DB.batch(statements)
+  return doomed.length
 }
 
 /**
@@ -184,6 +227,7 @@ export async function applyTrackForm(env: Env, owner: TrackOwner, form: FormData
     name: form.has("name") ? String(form.get("name")) : undefined,
     statuses: form.has("statuses") ? String(form.get("statuses")) : undefined,
     check_domain: form.has("check_domain") ? form.get("check_domain") === "true" : undefined,
+    keep_releases: form.has("keep_releases") ? String(form.get("keep_releases")) : undefined,
   }
   if (intent === "create-track") {
     const created = await createTrack(env, owner, input)

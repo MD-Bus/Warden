@@ -125,7 +125,7 @@ Apps are referenced by id or slug. Files, tracks, status definitions and reposit
 | `GET, PUT /apps/{app}/files` | List/upload; PUT uses raw bytes and Content-Length, max 100 MB |
 | `PATCH, DELETE /apps/{app}/files/{fileId}` | Edit metadata/withdraw/delete |
 | `GET, POST /apps/{app}/tracks` | List/create release tracks |
-| `GET, PATCH, DELETE /apps/{app}/tracks/{track}` | Manage tracks; deletion can use `move_to` |
+| `GET, PATCH, DELETE /apps/{app}/tracks/{track}` | Manage tracks; deletion can use `move_to`. `keep_releases` (1–1000, or `null` for all) is the release limit: setting it deletes the oldest releases beyond it at once and the PATCH response adds `pruned`, the number deleted. New releases are pruned the same way ([releases.md](releases.md#release-limit)) |
 | `GET, PUT, DELETE .../tracks/{track}/source` | Repository connection |
 | `POST .../tracks/{track}/source/regenerate-secret` | Rotate repository webhook secret |
 | `GET, POST .../tracks/{track}/source/imports` | History or import `{ "tag": "v1.4.0" }` |

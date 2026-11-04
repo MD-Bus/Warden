@@ -75,7 +75,8 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
         check_count: e.check_count,
         statuses,
         latest_version: latestRelease(files.filter((f) => f.available))?.version ?? null,
-        files,
+        // The dashboard shows the key-based address (the owner sees the key anyway); sites receive signed links.
+        files: files.map(({ link: _link, ...f }) => ({ ...f, download_url: `${origin}/download/${license.license_key}/${f.id}?tag=${encodeURIComponent(e.tag)}` })),
         versions: versions.filter((v) => v.attachment_id === e.id),
         check_url: `${origin}/check/${license.license_key}?tag=${encodeURIComponent(e.tag)}`,
       }

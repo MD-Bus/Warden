@@ -16,6 +16,10 @@ The export contains everything Warden stores, including the private signing key 
 
 Database migrations run by themselves on the first request after the update, and only move forward: to go back to an earlier version, restore the export.
 
+## 0.5.1 to 0.5.2
+
+No migration. `download_url` in check and download answers is now a signed link, `/download/t/<token>`, that does not contain the licence key ([files.md](files.md#download-links)). Site code that passes it to its updater as is needs no change. Code that reads the file id or the tag out of that address must read the response's `id` and `tag` fields instead. A link is valid for 7 days: code that stores it longer should run a new check before downloading.
+
 ## 0.4 to 0.5
 
 Back up D1 and R2 before upgrading. Migration 0016 is automatic and preserves licence keys, the installation's signing key, file ids, checksums, R2 object keys, repository credentials, import progress and download URLs.

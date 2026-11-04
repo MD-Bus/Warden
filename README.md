@@ -84,7 +84,7 @@ GET /download/<key>?tag=child-theme&domain=harborstudio.com
 GET /download/<key>/<file-id>?tag=child-theme&domain=harborstudio.com
 ```
 
-The tag scopes both listing and direct download authorization. Listed URLs carry the tag; append `&domain=...` when needed. Update URLs returned by checks already include the domain. See [files.md](docs/files.md) and [releases.md](docs/releases.md).
+The tag scopes both listing and direct download authorization. Checks and download lists answer with signed download links (`/download/t/<token>`), valid for 7 days, that open one file for one tag and do not contain the licence key, so updaters such as WordPress never print or log it. A link from a check already carries the domain; append `?domain=...` to a listed link when the list was requested without one. See [files.md](docs/files.md) and [releases.md](docs/releases.md).
 
 Deleting a licence preserves apps and releases. Regenerating its key affects all attached apps. Migration 0016 preserves existing keys, file ids, package checksums, R2 objects and old download links, and converts standalone projects to apps. Read [upgrade-notes.md](docs/upgrade-notes.md) before upgrading management integrations.
 

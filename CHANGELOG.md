@@ -7,6 +7,15 @@ All notable changes, newest first. Warden follows [semantic versioning](https://
 - **0.6.0, trust**: end-to-end tests on real Cloudflare (GitHub App, private repositories, phone width, CI), backups and export, two-factor sign-in or Cloudflare Access, a complete OpenAPI description checked by tests, independent security review
 - **1.0.0**: the check response and the API are frozen
 
+## 0.5.2 (unreleased)
+
+Security fix. No migration.
+
+### Fixed
+
+- Update links exposed the licence key. The `download_url` of a check's `update`, and of `latest` and `files` in download lists, was `/download/<key>/<file id>`, and WordPress prints that address during an update ("Downloading update from ..."), where admins and screenshots see it; servers and proxies log it too. These fields now hold a signed download link, `/download/t/<token>`, that opens one file for one tag and domain, is valid for 7 days, ends when the key is regenerated, and is checked against the release rules and the app's status when it is used. Sites that pass `download_url` to their updater need no change. An expired link answers `410` with status `link_expired`; the site's next check returns a new one. The key-based download addresses keep working. See [files.md](docs/files.md#download-links).
+- The licence page in the dashboard keeps showing the key-based download address, now always with the tag.
+
 ## 0.5.1 (2026-11-03)
 
 Bug fixes for 0.5.0. No migration and no API change.

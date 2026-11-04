@@ -79,7 +79,7 @@ export async function handleCheck(request: Request, env: Env, ctx: ExecutionCont
   if (license && version) {
     const files = await visibleFiles(env, license, domain, result, now, set, new URL(request.url).origin)
     const latest = latestRelease(files.filter((f) => f.available), channel)
-    result.update = { current: version, available: Boolean(latest && compareVersions(latest.version, version) > 0), latest: latest ? await releaseSummary(latest, signing, domain) : null }
+    result.update = { current: version, available: Boolean(latest && compareVersions(latest.version, version) > 0), latest: latest ? await releaseSummary(latest, signing) : null }
   }
   const body = JSON.stringify(result)
 

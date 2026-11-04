@@ -165,7 +165,11 @@ export function openApiSpec(origin: string) {
       },
       "/download/{key}": {
         servers:[{url:origin}],security:[],parameters:[{name:"key",in:"path",required:true,schema:{type:"string"}},{name:"tag",in:"query",schema:{type:"string"}},{name:"domain",in:"query",schema:{type:"string"}},{name:"channel",in:"query",schema:{enum:["stable","beta"]}}],
-        get:{summary:"Signed download list, grouped by app when tag is omitted",responses:{200:{description:"Selected app: { tag, app, valid, status, latest, files }. Several apps: { license_key, checked_at, apps: [...] }. Each file has a tag-scoped download_url."},404:err,429:err}},
+        get:{summary:"Signed download list, grouped by app when tag is omitted",responses:{200:{description:"Selected app: { tag, app, valid, status, latest, files }. Several apps: { license_key, checked_at, apps: [...] }. Each file has a download_url: a signed link (/download/t/{token}) for that file and tag, valid 7 days, without the licence key."},404:err,429:err}},
+      },
+      "/download/t/{token}": {
+        servers:[{url:origin}],security:[],parameters:[{name:"token",in:"path",required:true,schema:{type:"string"}},{name:"domain",in:"query",schema:{type:"string"},description:"Used only when the link carries no domain."}],
+        get:{summary:"Download through a signed link from a check or download list",responses:{200:{description:"File bytes with X-Warden-Sha256 and X-Warden-Release-Signature"},403:err,404:err,410:{description:"The link expired or the key was regenerated (status link_expired), or the release was withdrawn"},429:err}},
       },
       "/download/{key}/{fileId}": {
         servers:[{url:origin}],security:[],parameters:[{name:"key",in:"path",required:true,schema:{type:"string"}},{name:"fileId",in:"path",required:true,schema:{type:"string"}},{name:"tag",in:"query",schema:{type:"string"}},{name:"domain",in:"query",schema:{type:"string"}}],

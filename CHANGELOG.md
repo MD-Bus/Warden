@@ -7,7 +7,7 @@ All notable changes, newest first. Warden follows [semantic versioning](https://
 - **0.6.0, trust**: end-to-end tests on real Cloudflare (GitHub App, private repositories, phone width, CI), backups and export, two-factor sign-in or Cloudflare Access, a complete OpenAPI description checked by tests, independent security review
 - **1.0.0**: the check response and the API are frozen
 
-## 0.5.2 (unreleased)
+## 0.5.2 (2026-11-03)
 
 Security fix. No migration.
 

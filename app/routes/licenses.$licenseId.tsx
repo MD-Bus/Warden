@@ -20,7 +20,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
 import { NativeSelect } from "#/components/ui/native-select"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "#/components/ui/table"
 import { buildCheckResponse } from "#/lib/license"
-import { isOutdated, latestRelease } from "#/lib/releases"
+import { latestRelease, siteUpdateState } from "#/lib/releases"
 import { DEFAULT_COLOR, DEFAULT_STATUSES, effectiveStatusKey, findStatus, graceDays, graceEndsAt, grantsAccess, statusLabel, type StatusSet } from "#/lib/statuses"
 import { cn } from "#/lib/utils"
 import { daysUntil, describeExpiry, EXPIRING_WINDOW_DAYS } from "#/lib/views"
@@ -57,7 +57,11 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
       const statuses = await getStatusSetForApp(env, e.app_id)
       const status = effectiveStatusKey(c, statuses, now)
       const check = buildCheckResponse(c, null, now, domains, statuses)
-      const files = await visibleFiles(env, c, null, check, now, statuses, origin)
+      // Availability here means "offered in this status": the domain and site rules depend on the site asking, and a
+      // registered site has passed them. Evaluated with no domain, they would hide every release from limited licences.
+      const files = (await visibleFiles(env, c, null, check, now, statuses, origin)).map((f) => ({ ...f, available: f.statuses.includes(status) }))
+      const offered = files.filter((f) => f.available)
+      const latest = { stable: latestRelease(offered, "stable")?.version ?? null, beta: latestRelease(offered, "beta")?.version ?? null }
       return {
         id: e.id,
         tag: e.tag,
@@ -74,10 +78,10 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
         last_check_at: e.last_check_at,
         check_count: e.check_count,
         statuses,
-        latest_version: latestRelease(files.filter((f) => f.available))?.version ?? null,
+        latest_version: latest.stable,
         // The dashboard shows the key-based address (the owner sees the key anyway); sites receive signed links.
         files: files.map(({ link: _link, ...f }) => ({ ...f, download_url: `${origin}/download/${license.license_key}/${f.id}?tag=${encodeURIComponent(e.tag)}` })),
-        versions: versions.filter((v) => v.attachment_id === e.id),
+        versions: versions.filter((v) => v.attachment_id === e.id).map((v) => ({ ...v, state: siteUpdateState(v.version, latest[v.channel]) })),
         check_url: `${origin}/check/${license.license_key}?tag=${encodeURIComponent(e.tag)}`,
       }
     }),
@@ -158,7 +162,7 @@ export default function LicensePage({ loaderData, actionData }: Route.ComponentP
   const expiryTone = nextExpiry === null ? "default" : daysUntil(nextExpiry) < 0 ? "danger" : daysUntil(nextExpiry) <= EXPIRING_WINDOW_DAYS ? "warning" : "default"
   const silent = license.last_check_at === null || Date.now() - license.last_check_at > 3 * DAY
   const sitesUsed = license.sites_used ?? sites.length
-  const outdated = apps.reduce((n, e) => n + e.versions.filter((v) => isOutdated(v.version, e.latest_version)).length, 0)
+  const outdated = apps.reduce((n, e) => n + e.versions.filter((v) => v.state === "behind").length, 0)
 
   return (
     <>
@@ -528,7 +532,7 @@ function SitesTab({ license, apps, sites, blockedIps, outdated }: { license: Loa
   return (
     <div className="space-y-3">
       <p className="max-w-prose text-sm text-muted-foreground">
-        {license.max_sites === null ? `${sites.length} sites, no limit.` : `${sites.length} of ${license.max_sites} sites in use.`} A domain uses one slot for every attached app. Versions are reported per app.
+        {license.max_sites === null ? `${sites.length} site${sites.length === 1 ? "" : "s"}, no limit.` : `${sites.length} of ${license.max_sites} sites in use.`} A domain uses one slot for every attached app. Versions are reported per app.
         {outdated > 0 && ` ${outdated} installation${outdated === 1 ? " is" : "s are"} behind the latest release.`}
       </p>
       <div className="rounded-lg border bg-card">
@@ -546,7 +550,7 @@ function SitesTab({ license, apps, sites, blockedIps, outdated }: { license: Loa
           </TableHeader>
           <TableBody>
             {sites.map((site) => {
-              const reported = apps.flatMap((e) => e.versions.filter((v) => v.domain === site.domain).map((v) => ({ tag: e.tag, version: v.version, latest: e.latest_version })))
+              const reported = apps.flatMap((e) => e.versions.filter((v) => v.domain === site.domain).map((v) => ({ tag: e.tag, version: v.version, state: v.state })))
               return (
                 <TableRow key={site.domain}>
                   <TableCell className="font-medium">{site.domain}</TableCell>
@@ -559,7 +563,9 @@ function SitesTab({ license, apps, sites, blockedIps, outdated }: { license: Loa
                             <li key={r.tag} className="flex flex-wrap items-center gap-2">
                               {apps.length > 1 && <span className="text-xs text-muted-foreground">{r.tag}</span>}
                               <span className="font-mono text-xs">{r.version}</span>
-                              {isOutdated(r.version, r.latest) ? <Badge variant="warning">Update available</Badge> : r.latest && <Badge variant="success">Up to date</Badge>}
+                              {r.state === "behind" && <Badge variant="warning">Update available</Badge>}
+                              {r.state === "up_to_date" && <Badge variant="success">Up to date</Badge>}
+                              {r.state === "no_release" && <Badge variant="outline">No release for this status</Badge>}
                             </li>
                           ))}
                       </ul>

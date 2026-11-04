@@ -405,8 +405,8 @@ export function openApiSpec(origin: string) {
         parameters: [appParam],
         get: {
           summary: "Versions the sites of the app run",
-          description: "Built from the version each site reports with its check (`?version=`). `outdated` counts sites on a version older than `latest_version`, the highest stable release.",
-          responses: { 200: { description: "{ latest_version, sites, outdated, data: [{ version, sites, outdated }] }" }, 404: err },
+          description: "Built from the version each site reports with its check (`?version=`). Each site is compared with the latest release its own licence is offered, on the channel it checks. Every site counts in exactly one of `up_to_date`, `outdated`, `no_release` (its status receives no release) and `not_reported`. `latest_version` is the highest stable release of the app.",
+          responses: { 200: { description: "{ latest_version, sites, outdated, up_to_date, no_release, not_reported, data: [{ version, sites, behind, up_to_date, no_release, outdated }] }" }, 404: err },
         },
       },
       "/apps/{app}/files/{fileId}": {

@@ -39,6 +39,11 @@ type Context = { env: Env; request: Request; url: URL; origin: string; key: ApiK
 
 const need = (ctx: Context, scope: "read" | "manage" | "full") => requirePermission(ctx.key.scope, scope)
 
+function taggedVersions(rows: { version: string | null; tag: string }[], mode: string | undefined) {
+  if (!mode || mode === "legacy") return {}
+  return { version: rows.length === 1 ? rows[0].version : null, versions: Object.fromEntries(rows.map((v) => [v.tag, v.version])) }
+}
+
 const LICENSE_DEFAULTS: Omit<LicenseInput, "status"> = {
   name: "", customer_name: "", customer_email: "", app_id: null, max_sites: null, expires_at: null, domains: "", message: "", notes: "",
 }
@@ -222,8 +227,9 @@ async function licenseRoute(ctx: Context, segments: string[]): Promise<Response>
     if (method === "GET" && !extra) {
       const page = pageOf(await listActivations(env, license.id), (a) => a.domain, ctx.url.searchParams)
       if(page instanceof Response) return page
+      // Tagged licences record versions per app; `version` is that value when one app is attached, otherwise null.
       const versions=(await env.DB.prepare("SELECT v.domain,v.version,e.tag FROM activation_versions v JOIN license_apps e ON e.id=v.attachment_id WHERE e.license_id=?").bind(license.id).all<{domain:string;version:string|null;tag:string}>()).results
-      return reply({max_sites:license.max_sites,data:page.data.map((a) => ({...serializeActivation(a),...(license.expiry_mode !== "legacy" ? {versions:Object.fromEntries(versions.filter((v) => v.domain === a.domain).map((v) => [v.tag,v.version]))} : {})})),next:page.next})
+      return reply({max_sites:license.max_sites,data:page.data.map((a) => ({...serializeActivation(a),...taggedVersions(versions.filter((v) => v.domain === a.domain),license.expiry_mode)})),next:page.next})
     }
     if (method === "DELETE" && extra) {
       const denied = need(ctx, "manage")

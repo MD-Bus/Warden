@@ -1,5 +1,5 @@
 import { isValidSlug, slugify } from "../lib/apps"
-import { compareVersions, isOutdated, latestRelease } from "../lib/releases"
+import { compareVersions, latestRelease, siteUpdateState, type Channel } from "../lib/releases"
 import { defaultStatusKey, effectiveStatusKey, findStatus, MAX_GRACE_DAYS, type StatusSet } from "../lib/statuses"
 import { deleteAppFiles } from "./files.server"
 import { parseGraceDays, parseOptionalCount, type LicenseInput } from "./licenses.server"
@@ -171,34 +171,40 @@ export function appDefaults(app: App, now = Date.now()): Pick<LicenseInput, "sta
 export type VersionsInUse = {
   /** The highest stable version among the app's current releases, or null. */
   latest_version: string | null
-  /** Sites registered under the app's licences, total and behind the latest release their own licence is offered. */
+  /** Sites registered under the app's licences. Each is counted once in exactly one of the four states below. */
   sites: number
+  /** Behind the latest release their own licence is offered. */
   outdated: number
-  /** Sites per reported version, newest first. `version` is null for sites that never reported one; `behind` counts the sites on that version that are behind. */
-  data: { version: string | null; sites: number; behind: number; outdated: boolean }[]
+  up_to_date: number
+  /** Reported a version, but the licence's status receives no release to compare it with. */
+  no_release: number
+  not_reported: number
+  /** Sites per reported version, newest first. `version` is null for sites that never reported one. Equal versions (v1.4, 1.4.0) share a row. */
+  data: { version: string | null; sites: number; behind: number; up_to_date: number; no_release: number; outdated: boolean }[]
 }
 
-type SiteRow = { license_id: string; version: string | null; status: string; expires_at: number | null; grace_days: number | null; app_grace_days: number | null; last_check_at: number | null; created_at: number }
+type SiteRow = { license_id: string; version: string | null; channel: Channel; status: string; expires_at: number | null; grace_days: number | null; app_grace_days: number | null; last_check_at: number | null; created_at: number }
 type ReleaseRow = { license_id: string | null; app_id: string | null; track_id: string | null; version: string; channel: string; statuses: string; withdrawn_at: null }
 
 /**
  * Which versions the sites of an app's licences run, as reported with their checks (?version=). A site is behind
- * when its version is older than the latest stable release its own licence is offered: the latest of the track that
- * serves the licence's current status (its own track for that status, otherwise the app's).
+ * when its version is older than the latest release its own licence is offered on the site's channel: the latest of
+ * the track that serves the licence's current status (its own track for that status, otherwise the app's). This is the
+ * release the site's own check offers it.
  */
 export async function versionsInUse(env: Env, appId: string, now = Date.now()): Promise<VersionsInUse> {
-  const [sites, releases, ownTracks, set] = await Promise.all([
+  const [sites, releases, ownTracks, set, app] = await Promise.all([
     env.DB.prepare(
-      `SELECT x.license_id, x.version, l.status, l.expires_at, l.grace_days, a.grace_days AS app_grace_days, l.last_check_at, l.created_at FROM activations x JOIN licenses l ON l.id = x.license_id JOIN apps a ON a.id = l.app_id WHERE l.app_id = ? AND l.expiry_mode='legacy'
-       UNION ALL SELECT e.license_id,v.version,e.status,CASE WHEN l.expiry_mode='shared' THEN l.expires_at ELSE e.expires_at END,COALESCE(l.grace_days,e.grace_days),a.grace_days,e.last_check_at,l.created_at FROM activation_versions v JOIN license_apps e ON e.id=v.attachment_id JOIN licenses l ON l.id=e.license_id JOIN apps a ON a.id=e.app_id WHERE e.app_id=?`
+      `SELECT x.license_id, x.version, 'stable' AS channel, l.status, l.expires_at, l.grace_days, a.grace_days AS app_grace_days, l.last_check_at, l.created_at FROM activations x JOIN licenses l ON l.id = x.license_id JOIN apps a ON a.id = l.app_id WHERE l.app_id = ? AND l.expiry_mode='legacy'
+       UNION ALL SELECT e.license_id,v.version,v.channel,e.status,CASE WHEN l.expiry_mode='shared' THEN l.expires_at ELSE e.expires_at END,COALESCE(l.grace_days,e.grace_days),a.grace_days,e.last_check_at,l.created_at FROM activation_versions v JOIN license_apps e ON e.id=v.attachment_id JOIN licenses l ON l.id=e.license_id JOIN apps a ON a.id=e.app_id WHERE e.app_id=?`
     ).bind(appId,appId).all<SiteRow>(),
     env.DB.prepare(
       "SELECT license_id, app_id, track_id, version, channel, statuses, withdrawn_at FROM files WHERE (app_id = ? OR license_id IN (SELECT id FROM licenses WHERE app_id = ?)) AND version != '' AND withdrawn_at IS NULL ORDER BY uploaded_at DESC"
     ).bind(appId, appId).all<ReleaseRow>(),
     env.DB.prepare("SELECT license_id, statuses FROM release_tracks WHERE license_id IN (SELECT id FROM licenses WHERE app_id = ?)").bind(appId).all<{ license_id: string; statuses: string }>(),
     getStatusSetForApp(env, appId),
+    getApp(env, appId),
   ])
-  const app=await getApp(env,appId)
   if(app?.base_app_id) {
     const [baseFiles,own]=(await Promise.all([
       env.DB.prepare("SELECT license_id,app_id,track_id,version,channel,statuses,withdrawn_at FROM files WHERE app_id=? AND version<>'' AND withdrawn_at IS NULL ORDER BY uploaded_at DESC").bind(app.base_app_id).all<ReleaseRow>(),
@@ -215,31 +221,36 @@ export async function versionsInUse(env: Env, appId: string, now = Date.now()): 
   for (const t of ownTracks.results) ownKeys.set(t.license_id, new Set([...(ownKeys.get(t.license_id) ?? []), ...t.statuses.split(",").filter(Boolean)]))
   const latestFor = new Map<string, string | null>()
   const latestOf = (site: SiteRow) => {
-    const cacheKey=`${site.license_id}:${site.status}`
-    if (latestFor.has(cacheKey)) return latestFor.get(cacheKey)!
     const status = effectiveStatusKey(site, set, now)
+    const cacheKey = `${site.license_id}:${status}:${site.channel}`
+    if (latestFor.has(cacheKey)) return latestFor.get(cacheKey)!
     const replaced = ownKeys.get(site.license_id) ?? new Set<string>()
     const offered = releases.results.filter((r) => {
       const keys = r.statuses.split(",")
       if (r.license_id === site.license_id) return keys.includes(status)
       return r.app_id === appId && keys.includes(status) && !(r.track_id && replaced.has(status))
     })
-    const latest = latestRelease(offered)?.version ?? null
+    const latest = latestRelease(offered, site.channel)?.version ?? null
     latestFor.set(cacheKey, latest)
     return latest
   }
 
-  const groups = new Map<string | null, { sites: number; behind: number }>()
+  const data: VersionsInUse["data"] = []
+  let notReported = 0
   for (const site of sites.results) {
-    const group = groups.get(site.version) ?? { sites: 0, behind: 0 }
-    group.sites++
-    if (isOutdated(site.version, latestOf(site))) group.behind++
-    groups.set(site.version, group)
+    const version = site.version
+    let row = data.find((r) => (r.version === null || version === null ? r.version === version : compareVersions(r.version, version) === 0))
+    if (!row) data.push((row = { version, sites: 0, behind: 0, up_to_date: 0, no_release: 0, outdated: false }))
+    row.sites++
+    const state = siteUpdateState(version, latestOf(site))
+    if (state === "not_reported") notReported++
+    else if (state === "behind") row.behind++
+    else row[state]++
+    row.outdated = row.behind > 0
   }
-  const data = [...groups]
-    .map(([version, g]) => ({ version, sites: g.sites, behind: g.behind, outdated: g.behind > 0 }))
-    .sort((a, b) => (a.version === null ? 1 : b.version === null ? -1 : compareVersions(b.version, a.version)))
-  return { latest_version: latestOverall, sites: data.reduce((n, r) => n + r.sites, 0), outdated: data.reduce((n, r) => n + r.behind, 0), data }
+  data.sort((a, b) => (a.version === null ? 1 : b.version === null ? -1 : compareVersions(b.version, a.version)))
+  const total = (field: "sites" | "behind" | "up_to_date" | "no_release") => data.reduce((n, r) => n + r[field], 0)
+  return { latest_version: latestOverall, sites: total("sites"), outdated: total("behind"), up_to_date: total("up_to_date"), no_release: total("no_release"), not_reported: notReported, data }
 }
 
 /** For each app: how many of its sites are behind the latest release their own licence is offered. */

@@ -109,21 +109,33 @@ The same fields can be sent in a POST body: `{ "tag": "parent-theme", "domain": 
 
 ## Knowing which versions are installed
 
-The version a site sends is recorded with the site (its activation). The dashboard shows it:
+The version and channel a site sends are recorded with the site, per attached app, including while its licence is invalid. A site is compared with the release its own check offers: the latest release of the track serving its licence's status, on the channel the site checks. Each site has exactly one state:
 
-- On a **licence**, the *Sites* tab lists each site with its version, and marks sites behind the latest release.
-- On an **app**, the *Releases* tab shows which versions the app's sites run and how many are outdated.
+| State | Meaning |
+|---|---|
+| Up to date | On the latest offered release, or newer |
+| Behind | On an older version than the latest offered release |
+| No release for this status | The status of the licence receives no release, so there is nothing to compare with |
+| Not reported | The site never sent a version |
 
-Through the API: `GET /api/v1/licenses/{id}/activations` returns each site's `version`, and `GET /api/v1/apps/{app}/versions` returns the distribution:
+- On a **licence**, the *Sites* tab lists each site with its version and state.
+- On an **app**, the *Releases* tab shows which versions the app's sites run and how many sites are in each state. Equal versions written differently (`v1.4`, `1.4.0`) share a row.
+
+A site checks about every 12 hours, so a site updated a moment ago stays behind until its next check.
+
+Through the API: `GET /api/v1/licenses/{id}/activations` returns each site's `versions` by tag (and `version` when one app is attached), and `GET /api/v1/apps/{app}/versions` returns the distribution:
 
 ```json
 {
   "latest_version": "1.4.0",
   "sites": 12,
   "outdated": 3,
+  "up_to_date": 9,
+  "no_release": 0,
+  "not_reported": 0,
   "data": [
-    { "version": "1.4.0", "sites": 9, "outdated": false },
-    { "version": "1.3.0", "sites": 3, "outdated": true }
+    { "version": "1.4.0", "sites": 9, "behind": 0, "up_to_date": 9, "no_release": 0, "outdated": false },
+    { "version": "1.3.0", "sites": 3, "behind": 3, "up_to_date": 0, "no_release": 0, "outdated": true }
   ]
 }
 ```

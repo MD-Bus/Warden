@@ -12,7 +12,7 @@ with independent statuses, shared or separate expiry dates, and app-owned releas
 <a href="https://deploy.workers.cloudflare.com/?url=https://github.com/momardia54/Warden"><img src="https://deploy.workers.cloudflare.com/button" alt="Deploy to Cloudflare"></a>
 </p>
 
-> **Status: pre-1.0 — build 0.5.1 (next).** This README describes the tagged app licensing model. The API and data model may still change before 1.0.0; every change is listed in [CHANGELOG.md](CHANGELOG.md). The Deploy button installs `main`; an approved build on `develop` becomes the default installation after its release pull request is merged. See [Roadmap.md](Roadmap.md) for versioning and [Security.md](Security.md) for the security model.
+> **Status: pre-1.0 — version 0.5.1 (2026-11-03).** This README describes the tagged app licensing model. The API and data model may still change before 1.0.0; every change is listed in [CHANGELOG.md](CHANGELOG.md). The Deploy button installs `main`; an approved build on `develop` becomes the default installation after its release pull request is merged. See [Roadmap.md](Roadmap.md) for versioning and [Security.md](Security.md) for the security model.
 
 ![Warden overview](docs/screenshots/overview.jpg)
 
@@ -40,7 +40,7 @@ Tags are unique within a licence and separate from Git version tags or release t
 
 ## Patch 0.5.1
 
-The next patch fixes native tag-field validation in modern browsers in both the licence and template forms. Existing tags and the 0.5.0 data model are unchanged; no migration is required.
+Bug fixes for 0.5.0: tag-field validation in modern browsers, the licence page's tabs and details (public signing key on the Integration tab), one domain registration per multi-app check, links between apps and their migrated project apps, and the local review port. No migration and no API change. See [CHANGELOG.md](CHANGELOG.md).
 
 ## Upgrading to 0.5.0
 

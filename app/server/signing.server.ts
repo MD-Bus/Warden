@@ -17,6 +17,7 @@ export type SigningKey = {
   publicKeyPem: string
   createdAt: number
   privateKey: CryptoKey
+  publicCryptoKey: CryptoKey
 }
 
 type StoredKey = { jwk: JsonWebKey; created_at: number }
@@ -39,7 +40,12 @@ export function base64(bytes: Uint8Array): string {
   return btoa(s)
 }
 
-function fromBase64url(s: string): Uint8Array<ArrayBuffer> {
+/** Base64url without padding (RFC 4648 section 5), for values carried in a URL path. */
+export function base64url(bytes: Uint8Array): string {
+  return base64(bytes).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "")
+}
+
+export function fromBase64url(s: string): Uint8Array<ArrayBuffer> {
   const bin = atob(s.replace(/-/g, "+").replace(/_/g, "/") + "===".slice((s.length + 3) % 4))
   return Uint8Array.from(bin, (c) => c.charCodeAt(0))
 }
@@ -75,6 +81,7 @@ async function loadOrCreate(env: Env): Promise<SigningKey> {
     publicKeyPem: pem,
     createdAt: stored.created_at,
     privateKey: await crypto.subtle.importKey("jwk", stored.jwk, { name: "Ed25519" }, false, ["sign"]),
+    publicCryptoKey: await crypto.subtle.importKey("raw", raw, { name: "Ed25519" }, false, ["verify"]),
   }
 }
 
@@ -92,6 +99,16 @@ async function sha256Bytes(bytes: Uint8Array<ArrayBuffer>): Promise<string> {
 /** Ed25519 signature of a UTF-8 text, base64. */
 export async function signText(key: SigningKey, text: string): Promise<string> {
   return base64(new Uint8Array(await crypto.subtle.sign({ name: "Ed25519" }, key.privateKey, encoder.encode(text))))
+}
+
+/** Raw Ed25519 signature of a UTF-8 text. */
+export async function signBytes(key: SigningKey, text: string): Promise<Uint8Array> {
+  return new Uint8Array(await crypto.subtle.sign({ name: "Ed25519" }, key.privateKey, encoder.encode(text)))
+}
+
+/** Whether `signature` is this install's Ed25519 signature of a UTF-8 text. */
+export async function verifyBytes(key: SigningKey, text: string, signature: Uint8Array<ArrayBuffer>): Promise<boolean> {
+  return signature.length === 64 && crypto.subtle.verify({ name: "Ed25519" }, key.publicCryptoKey, signature, encoder.encode(text))
 }
 
 /**

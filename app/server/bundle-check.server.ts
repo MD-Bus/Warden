@@ -74,7 +74,7 @@ export async function handleBundleCheck(request: Request, env: Env, ctx: Executi
           files.filter((f) => f.available),
           channel,
         )
-        check.update = { current: version, available: Boolean(latest && compareVersions(latest.version, version) > 0), latest: latest ? await releaseSummary(latest, signing, domain) : null }
+        check.update = { current: version, available: Boolean(latest && compareVersions(latest.version, version) > 0), latest: latest ? await releaseSummary(latest, signing) : null }
       }
       return { result: { ...check, tag: c.tag, app: { id: c.app_id, slug: c.app_slug, name: c.app_name } } as { valid: boolean } & Record<string, unknown>, version }
     }),

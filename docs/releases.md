@@ -79,7 +79,7 @@ GET https://<your-worker>/check/<licence key>?tag=parent-theme&domain=harborstud
       "sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
       "signature": "<Ed25519 signature of sha256, base64>",
       "released_at": "2026-10-08T14:03:11.000Z",
-      "download_url": "https://<your-worker>/download/WRD-.../fil_...?domain=harborstudio.com"
+      "download_url": "https://<your-worker>/download/t/eyJsIjoi..."
     }
   }
 }
@@ -87,7 +87,7 @@ GET https://<your-worker>/check/<licence key>?tag=parent-theme&domain=harborstud
 
 - `latest` is the newest release this licence can download **right now**, for this domain, in the site's channel: the release rule is applied exactly as for a download. A suspended licence is offered nothing; a release published only for Completed licences is offered once the licence is Completed.
 - `available` is `true` when `latest` is newer than `current`.
-- `download_url` already carries the domain, so the site can fetch it as is.
+- `download_url` is a signed download link valid for 7 days ([files.md](files.md#download-links)). It carries the tag and domain and does not contain the licence key, so the site can hand it to its updater as is.
 - Add `&channel=beta` to receive beta releases too.
 - The whole response, `update` included, is signed with the installation's Ed25519 key ([checking.md](checking.md#verifying-the-signature)).
 - The `update` block appears only when the site sends a valid `version`. Older site code that does not send one gets the same response as before.

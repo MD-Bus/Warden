@@ -5,7 +5,8 @@ import { buildCheckResponse, KEY_PATTERN, normalizeDomain, type CheckResponse } 
 import { isChannel, latestRelease, type Channel } from "../lib/releases"
 import { describeStatusKeys, type StatusSet } from "../lib/statuses"
 import { getFileForLicense, listFilesForLicense, releaseRule, type LicenseFile } from "./files.server"
-import { getLicenseByKey, listActivations, type License } from "./licenses.server"
+import { getLicense, getLicenseByKey, listActivations, type License } from "./licenses.server"
+import { createDownloadLink, keyFingerprint, readDownloadLink } from "./download-links.server"
 import { getStatusSetForLicense } from "./statuses.server"
 import { getSigningKey, signatureHeaders, signRelease, type SigningKey } from "./signing.server"
 
@@ -59,7 +60,8 @@ export type VisibleFile = {
   statuses: string[]
   check_domain: boolean
   available: boolean
-  download_url: string
+  /** The file's signed download link (see download-links.server.ts), created only when an answer includes it. */
+  link: () => Promise<string>
 }
 
 /**
@@ -70,6 +72,7 @@ export type VisibleFile = {
  */
 export async function visibleFiles(env: Env, license: License, domain: string | null, check: CheckResponse, now: number, set: StatusSet, origin: string): Promise<VisibleFile[]> {
   const files = (await listFilesForLicense(env, license)).filter((f) => f.withdrawn_at === null)
+  const signing = await getSigningKey(env)
   return files.map((f) => {
     const rule = releaseRule(f, set)
     return {
@@ -86,13 +89,16 @@ export async function visibleFiles(env: Env, license: License, domain: string | 
       statuses: rule.statuses,
       check_domain: rule.check_domain,
       available: accessFor(license, f, domain, check, now, set).allowed,
-      download_url: `${origin}/download/${license.license_key}/${f.id}${license.tag ? `?tag=${encodeURIComponent(license.tag)}` : ""}`,
+      link: () => createDownloadLink(signing, origin, license, f.id, domain, now),
     }
   })
 }
 
-/** The fields of a release a site needs to offer an update, with the signature of its checksum. */
-export async function releaseSummary(f: VisibleFile, key: SigningKey, domain: string | null = null) {
+/**
+ * The fields of a release a site needs to offer an update, with the signature of its checksum. The download link
+ * carries the domain the files were listed for, so the site fetches it as is.
+ */
+export async function releaseSummary(f: VisibleFile, key: SigningKey) {
   return {
     id: f.id,
     name: f.name,
@@ -103,7 +109,7 @@ export async function releaseSummary(f: VisibleFile, key: SigningKey, domain: st
     sha256: f.sha256 || null,
     signature: await signRelease(key, f.sha256),
     released_at: new Date(f.uploaded_at).toISOString(),
-    download_url: domain ? `${f.download_url}${f.download_url.includes("?") ? "&" : "?"}domain=${encodeURIComponent(domain)}` : f.download_url,
+    download_url: await f.link(),
   }
 }
 
@@ -122,7 +128,7 @@ const publicEntry = async (f: VisibleFile, key: SigningKey) => ({
   statuses: f.statuses,
   check_domain: f.check_domain,
   available: f.available,
-  download_url: f.download_url,
+  download_url: await f.link(),
 })
 
 /**
@@ -132,6 +138,9 @@ const publicEntry = async (f: VisibleFile, key: SigningKey) => ({
  *                                                          availability and the latest release in the channel
  *   GET /download/<key>/<file id>[?domain=example.com]       returns the file, a JSON error with HTTP 403, or 410
  *                                                          for a withdrawn release
+ *
+ * Listed files and `latest` carry signed download links (GET /download/t/<token>, see handleLinkDownload) rather
+ * than this address, so the key is not shown or logged by updaters.
  *
  * Every JSON response is signed with the install's Ed25519 key. A file carries X-Warden-Sha256 and
  * X-Warden-Release-Signature, the signature of that checksum.
@@ -161,6 +170,35 @@ export async function handleDownload(request: Request, env: Env, ctx: ExecutionC
     return response.json()
   }))
   return reply(signing,{license_key:key,checked_at:new Date().toISOString(),apps},200)
+}
+
+/**
+ * Public endpoint: GET /download/t/<token>, a signed download link from a check or download answer
+ * (download-links.server.ts). It serves the file exactly as GET /download/<key>/<file id>?tag=<tag>&domain=<domain>
+ * would, so the release rules and the licence's status apply at the time of the download. The domain bound in the
+ * link wins; a link listed without one accepts ?domain=.
+ */
+export async function handleLinkDownload(request: Request, env: Env, ctx: ExecutionContext, token: string): Promise<Response> {
+  if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: { ...CORS, "access-control-allow-methods": "GET" } })
+  const signing = await getSigningKey(env)
+  if (request.method !== "GET" && request.method !== "HEAD") return reply(signing, { error: "Method not allowed. Use GET." }, 405)
+  const link = await readDownloadLink(signing, token, Date.now())
+  if (!link.ok && link.reason === "expired") return reply(signing, { valid: false, status: "link_expired", message: "This download link has expired. Check the licence again for a new link." }, 410)
+  if (!link.ok) {
+    reportUnknownKey(env, ctx, request)
+    return reply(signing, { valid: false, status: "unknown", message: "Unknown download link." }, 404)
+  }
+  const { claims } = link
+  const license = await getLicense(env, claims.l)
+  // A regenerated key, or a deleted licence, ends every link issued before.
+  if (!license || (await keyFingerprint(license.license_key)) !== claims.k) {
+    return reply(signing, { valid: false, status: "link_expired", message: "This download link is no longer valid. Check the licence again for a new link." }, 410)
+  }
+  const target = new URL(`/download/${license.license_key}/${claims.f}`, request.url)
+  if (claims.t) target.searchParams.set("tag", claims.t)
+  const domain = claims.d ?? new URL(request.url).searchParams.get("domain")
+  if (domain) target.searchParams.set("domain", domain)
+  return handleDownload(new Request(target, { method: request.method, headers: request.headers }), env, ctx, license.license_key, claims.f)
 }
 
 async function legacyDownload(request: Request, env: Env, ctx: ExecutionContext, key: string, fileId: string | null, context?: AppContext): Promise<Response> {

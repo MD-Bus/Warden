@@ -25,7 +25,22 @@ The list returns the selected app, tag, check validity, `latest`, and `files`. F
 
 A tag scopes direct downloads too: a child-theme tag cannot download a parent-theme file. A direct URL without a tag is supported for existing links and resolves the app owning that file. If a licence attaches that app under several tags, supply a tag to select which access rules apply.
 
-Listed download URLs contain the tag. Append the domain with `&domain=...`. Update URLs returned by `/check` already contain both tag and domain. JSON responses carry `X-Warden-Signature-Ed25519` and `X-Warden-Key-Id`. File bytes carry `X-Warden-Sha256` and `X-Warden-Release-Signature`; see [releases.md](releases.md#verifying-a-package).
+### Download links
+
+Listed files, `latest`, and the `update` of a check answer with a signed download link instead of the key-based address:
+
+```
+GET /download/t/<token>
+```
+
+The token names the licence, the file, the tag and the domain the list was requested for, and is signed with the installation's Ed25519 key. It does not contain the licence key, so an updater that shows or logs the package address (WordPress prints "Downloading update from ...") does not expose the key. A link:
+
+- opens only that file, for that tag; the release rule and the app's status are evaluated again when it is used, exactly as for `/download/<key>/<file-id>`;
+- is valid for **7 days**, long enough for an update notice that waits for an admin. An expired link answers `410` with status `link_expired`; the site's next check returns a new one;
+- stops working when the licence key is regenerated (`410`, `link_expired`);
+- carries the domain when the check or list sent one. A link listed without a domain accepts `?domain=...`; a bound domain cannot be replaced.
+
+An altered or unknown token answers `404` and counts towards the invalid licence keys rule. The key-based addresses above keep working for existing sites. JSON responses carry `X-Warden-Signature-Ed25519` and `X-Warden-Key-Id`. File bytes carry `X-Warden-Sha256` and `X-Warden-Release-Signature`; see [releases.md](releases.md#verifying-a-package).
 
 ## Managing files
 

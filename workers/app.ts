@@ -1,7 +1,7 @@
 import { createRequestHandler } from "react-router"
 import { handleApi } from "../app/server/api.server"
 import { handleCheck } from "../app/server/check.server"
-import { handleDownload } from "../app/server/download.server"
+import { handleDownload, handleLinkDownload } from "../app/server/download.server"
 import { guardPublic } from "../app/server/guard.server"
 import { pruneBlocks } from "../app/server/ip-blocks.server"
 import { pruneIpEvents } from "../app/server/protection.server"
@@ -56,6 +56,10 @@ export default {
     // Public endpoint that authenticates with the licence key in the address.
     const check = url.pathname.match(/^\/check\/([A-Za-z0-9-]{10,40})\/?$/)
     if (check) return (await guardPublic(request, env, ctx, "check", check[1].toUpperCase())) ?? handleCheck(request, env, ctx, check[1].toUpperCase())
+
+    // Signed download link from a check or download answer: the token is the credential, not the licence key.
+    const link = url.pathname.match(/^\/download\/t\/([A-Za-z0-9_.-]{1,1024})\/?$/)
+    if (link) return (await guardPublic(request, env, ctx, "download", "")) ?? handleLinkDownload(request, env, ctx, link[1])
 
     const download = url.pathname.match(/^\/download\/([A-Za-z0-9-]{10,40})(?:\/(fil_[a-z0-9]+))?\/?$/)
     if (download) return (await guardPublic(request, env, ctx, "download", download[1].toUpperCase())) ?? handleDownload(request, env, ctx, download[1].toUpperCase(), download[2] ?? null)

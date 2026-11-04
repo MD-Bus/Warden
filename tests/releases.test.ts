@@ -139,7 +139,9 @@ test("a check with a version offers the newest release the licence can download"
   assert.equal(outdated.update.latest.version, "1.4.0")
   assert.equal(outdated.update.latest.changelog, "Faster gallery.")
   assert.equal(outdated.update.latest.sha256, current.sha256)
-  assert.equal(outdated.update.latest.download_url, `${ORIGIN}/download/${license.license_key}/${current.id}?domain=harborstudio.com`)
+  // A signed link (download-links.test.ts): the licence key is not part of the address.
+  assert.match(outdated.update.latest.download_url, /^https:\/\/w\.dev\/download\/t\/[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/)
+  assert.ok(!outdated.update.latest.download_url.includes(license.license_key))
 
   const upToDate = await check("domain=harborstudio.com&version=1.4.0")
   assert.equal(upToDate.update.available, false)

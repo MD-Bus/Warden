@@ -2,7 +2,7 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
 import { makeBucket, makeCtx, makeDb } from "./helpers/d1.ts"
-import { compareVersions, isOutdated, isValidVersion, latestRelease, readReportedVersion, sortForDisplay } from "../app/lib/releases.ts"
+import { compareVersions, isValidVersion, latestRelease, readReportedVersion, siteUpdateState, sortForDisplay } from "../app/lib/releases.ts"
 import { createApp } from "../app/server/apps.server.ts"
 import { handleCheck } from "../app/server/check.server.ts"
 import { handleDownload } from "../app/server/download.server.ts"
@@ -57,10 +57,11 @@ test("version format, reported versions and display order", () => {
   assert.equal(readReportedVersion(" 1.3.0 "), "1.3.0")
   assert.equal(readReportedVersion("not-a-version"), null)
   assert.equal(readReportedVersion(42), null)
-  assert.equal(isOutdated("1.3.0", "1.4.0"), true)
-  assert.equal(isOutdated("1.4.0", "1.4.0"), false)
-  assert.equal(isOutdated(null, "1.4.0"), false)
-  assert.equal(isOutdated("1.3.0", null), false)
+  assert.equal(siteUpdateState("1.3.0", "1.4.0"), "behind")
+  assert.equal(siteUpdateState("1.4.0", "1.4.0"), "up_to_date")
+  assert.equal(siteUpdateState("v1.4", "1.4.0"), "up_to_date")
+  assert.equal(siteUpdateState(null, "1.4.0"), "not_reported")
+  assert.equal(siteUpdateState("1.3.0", null), "no_release")
   const files = [
     { version: "", channel: "stable", withdrawn_at: null, uploaded_at: 5 },
     { version: "1.2.0", channel: "stable", withdrawn_at: null, uploaded_at: 1 },
@@ -245,10 +246,13 @@ test("API: release fields, withdrawal and the versions sites run", async () => {
     latest_version: "1.2.0",
     sites: 4,
     outdated: 2,
+    up_to_date: 1,
+    no_release: 0,
+    not_reported: 1,
     data: [
-      { version: "1.2.0", sites: 1, behind: 0, outdated: false },
-      { version: "1.1.0", sites: 2, behind: 2, outdated: true },
-      { version: null, sites: 1, behind: 0, outdated: false },
+      { version: "1.2.0", sites: 1, behind: 0, up_to_date: 1, no_release: 0, outdated: false },
+      { version: "1.1.0", sites: 2, behind: 2, up_to_date: 0, no_release: 0, outdated: true },
+      { version: null, sites: 1, behind: 0, up_to_date: 0, no_release: 0, outdated: false },
     ],
   })
   const sites = (await call("GET", `/licenses/${lic.id}/activations`)).json.data

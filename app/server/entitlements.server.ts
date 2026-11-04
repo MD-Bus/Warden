@@ -1,5 +1,6 @@
 import { MAX_LICENSE_APPS, isExpiryMode, validTag, type LicenseTemplate, type TemplateSlot } from "../lib/entitlements"
 import { generateLicenseKey, parseDomains } from "../lib/license"
+import type { Channel } from "../lib/releases"
 import { defaultStatusKey, effectiveStatusKey, graceDays, graceEndsAt, grantsAccess } from "../lib/statuses"
 import { applyLicenseBody } from "./api-input.server"
 import { fail, iso, parseExpiry } from "./api-http.server"
@@ -38,12 +39,12 @@ export function listAttachments(env: Env, licenseId: string): Promise<Attachment
     .all<Attachment>()
     .then((r) => r.results)
 }
-export type AttachmentVersion = { attachment_id: string; domain: string; version: string | null; last_seen_at: number }
+export type AttachmentVersion = { attachment_id: string; domain: string; version: string | null; channel: Channel; last_seen_at: number }
 
 /** Versions reported by each site, per attachment, for every app of a licence (one query). */
 export function listAttachmentVersions(env: Env, licenseId: string): Promise<AttachmentVersion[]> {
   return env.DB.prepare(
-    `SELECT v.attachment_id, v.domain, v.version, v.last_seen_at
+    `SELECT v.attachment_id, v.domain, v.version, v.channel, v.last_seen_at
     FROM activation_versions v JOIN license_apps e ON e.id = v.attachment_id WHERE e.license_id = ? ORDER BY v.domain`,
   )
     .bind(licenseId)

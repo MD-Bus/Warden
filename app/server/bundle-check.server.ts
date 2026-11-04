@@ -1,5 +1,5 @@
 import { buildCheckResponse, normalizeDomain } from "../lib/license"
-import { compareVersions, isChannel, latestRelease, readReportedVersion } from "../lib/releases"
+import { compareVersions, isChannel, latestRelease, readReportedVersion, type Channel } from "../lib/releases"
 import { contextsForLicense, type AppContext } from "./entitlements.server"
 import { getStatusSetForApp } from "./statuses.server"
 import { getSigningKey, signatureHeaders } from "./signing.server"
@@ -50,7 +50,7 @@ export async function handleBundleCheck(request: Request, env: Env, ctx: Executi
     return send({ error: { code: "tag_required", message: "Send tag with version, or send a versions object keyed by tag." } }, 422)
   const ip = clientIp(request)
   const versions = data.versions && typeof data.versions === "object" && !Array.isArray(data.versions) ? (data.versions as Record<string, unknown>) : {}
-  const channel = isChannel(pick("channel")) ? (pick("channel") as "stable" | "beta") : "stable"
+  const channel: Channel = isChannel(pick("channel")) ? (pick("channel") as Channel) : "stable"
   // Sites and status sets are read once for the whole request, not once per attached app.
   const [sets, sites] = await Promise.all([Promise.all(selected.map((c) => getStatusSetForApp(env, c.app_id))), license.max_sites !== null ? listActivations(env, license.id) : Promise.resolve([])])
   let activated = sites.map((a) => a.domain)
@@ -80,12 +80,12 @@ export async function handleBundleCheck(request: Request, env: Env, ctx: Executi
     }),
   )
   // One batch records every app's check.
-  const records = env.DB.batch(selected.flatMap((c, i) => checkStatements(env, c, String(results[i].result.status), checks[i].valid, domain, results[i].version, ip, now)))
+  const records = env.DB.batch(selected.flatMap((c, i) => checkStatements(env, c, String(results[i].result.status), domain, results[i].version, channel, ip, now)))
   ctx.waitUntil(env.DB.prepare("UPDATE licenses SET last_check_at=?,last_check_domain=?,check_count=check_count+1 WHERE id=?").bind(now, domain, license.id).run())
   ctx.waitUntil(records.then(() => applyRules(env, ip, { kind: "check", invalid: results.some((r) => !r.result.valid) }, now)))
   return send(results.length === 1 ? results[0].result : { name: license.name, apps: results.map((r) => r.result) })
 }
-function checkStatements(env: Env, c: AppContext, status: string, valid: boolean, domain: string | null, version: string | null, ip: string | null, now: number): D1PreparedStatement[] {
+function checkStatements(env: Env, c: AppContext, status: string, domain: string | null, version: string | null, channel: Channel, ip: string | null, now: number): D1PreparedStatement[] {
   const statements = [
     env.DB.prepare("UPDATE license_apps SET last_check_at=?,check_count=check_count+1 WHERE id=?").bind(now, c.attachment_id!),
     env.DB.prepare("INSERT INTO activity (license_id,at,event,status,domain,detail,ip,app_id,tag) VALUES (?,?,'check',?,?,?,?,?,?)").bind(
@@ -99,11 +99,15 @@ function checkStatements(env: Env, c: AppContext, status: string, valid: boolean
       c.tag!,
     ),
   ]
-  if (valid && domain)
+  // The site's registration decides, not the validity of this check: a suspended site keeps reporting what it runs.
+  if (domain && status !== "domain_mismatch" && status !== "site_limit_reached")
     statements.push(
       env.DB.prepare(
-        `INSERT INTO activation_versions (attachment_id,domain,version,last_seen_at) VALUES (?,?,?,?) ON CONFLICT(attachment_id,domain) DO UPDATE SET version=COALESCE(excluded.version,activation_versions.version),last_seen_at=excluded.last_seen_at`,
-      ).bind(c.attachment_id!, domain, version, now),
+        `INSERT INTO activation_versions (attachment_id,domain,version,channel,last_seen_at)
+        SELECT ?,?,?,?,? WHERE EXISTS (SELECT 1 FROM activations WHERE license_id=? AND domain=?)
+        ON CONFLICT(attachment_id,domain) DO UPDATE SET version=COALESCE(excluded.version,activation_versions.version),
+        channel=CASE WHEN excluded.version IS NULL THEN activation_versions.channel ELSE excluded.channel END,last_seen_at=excluded.last_seen_at`,
+      ).bind(c.attachment_id!, domain, version, channel, now, c.id, domain),
     )
   return statements
 }

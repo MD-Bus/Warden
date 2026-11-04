@@ -178,7 +178,7 @@ export default function AppPage({ loaderData, actionData }: Route.ComponentProps
             value={versions.outdated}
             detail={versions.sites > 0 ? `of ${versions.sites} sites` : "No site yet"}
             tone={versions.outdated > 0 ? "warning" : "default"}
-            help="Sites that reported a version older than the latest release with their check (?version=). Sites that never report a version are not counted."
+            help="Sites on a version older than the latest release their own licence is offered, on the channel they check. Sites that never report a version, and sites whose status receives no release, are not counted."
           />
         </FactStrip>
 

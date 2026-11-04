@@ -99,9 +99,16 @@ export function latestRelease<T extends ReleaseLike>(files: T[], requested: Chan
   return best
 }
 
-/** Whether a site on `installed` is behind `latest`. Unknown versions are never reported as outdated. */
-export function isOutdated(installed: string | null | undefined, latest: string | null | undefined): boolean {
-  return Boolean(installed && latest && compareVersions(installed, latest) < 0)
+/**
+ * Where a site stands against the latest release its licence is offered. A site with no offered release (its status
+ * receives none) has nothing to compare with: it is neither up to date nor behind.
+ */
+export type SiteUpdateState = "up_to_date" | "behind" | "no_release" | "not_reported"
+
+export function siteUpdateState(installed: string | null | undefined, latest: string | null | undefined): SiteUpdateState {
+  if (!installed) return "not_reported"
+  if (!latest) return "no_release"
+  return compareVersions(installed, latest) < 0 ? "behind" : "up_to_date"
 }
 
 /** Sorts files for display: releases by version, newest first, then attachments by upload date, newest first. */

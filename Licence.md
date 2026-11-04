@@ -1,5 +1,6 @@
 MIT License
 
+Copyright (c) 2022 Bohdan Petryshyn
 Copyright (c) 2026 momardia54
 
 Permission is hereby granted, free of charge, to any person obtaining a copy

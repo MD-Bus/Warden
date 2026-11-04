@@ -56,6 +56,12 @@ Warden uses [semantic versioning](https://semver.org/). The version is in `packa
 
 Version 0.5.0 is prepared on `develop`. A version tag identifies the approved build; `main` and the public documentation continue through their release pull requests.
 
+### Release limit per track (unreleased, version to be decided)
+
+- [x] A track keeps the newest N releases; older ones are deleted with their files when a release is added or the limit is lowered (migration 0017)
+- [ ] Select several releases in a track and delete them in one step
+- [ ] A default release limit for tracks that are created automatically on the first upload
+
 ## Towards 1.0.0
 
 Version 1.0.0 freezes the check response and the API, so everything that would change them comes first. Trust work follows the completed licensing model.

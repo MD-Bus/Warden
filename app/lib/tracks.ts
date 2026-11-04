@@ -10,6 +10,7 @@ export const MAX_TRACK_NAME = 60
 
 export type TrackLike = { id: string; name: string; statuses: string; position?: number }
 
+
 export const trackStatusKeys = (track: Pick<TrackLike, "statuses">): string[] => track.statuses.split(",").filter(Boolean)
 
 /** Statuses of `statuses` that another track (other than `exceptId`) already serves, with that track. */
@@ -65,4 +66,4 @@ export function prefixForTag(tag: string, prefixes: string[]): string | null {
 }
 
 /** A track as the dashboard shows it: status keys as a list, the domain check as a boolean. */
-export const trackView = (track: TrackLike & { check_domain: number }) => ({ id: track.id, name: track.name, statuses: trackStatusKeys(track), check_domain: track.check_domain === 1 })
+export const trackView = (track: TrackLike & { check_domain: number; keep_releases: number | null }) => ({ id: track.id, name: track.name, statuses: trackStatusKeys(track), check_domain: track.check_domain === 1, keep_releases: track.keep_releases })

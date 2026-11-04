@@ -364,7 +364,7 @@ async function serializeTrack(ctx: Context, track: ReleaseTrack, sources: Releas
   const stats = await ctx.env.DB.prepare("SELECT COUNT(*) AS releases FROM files WHERE track_id = ?").bind(track.id).first<{ releases: number }>()
   const source = sources.find((s) => s.track_id === track.id)
   return {
-    id: track.id, name: track.name, statuses: track.statuses.split(",").filter(Boolean), check_domain: track.check_domain === 1, position: track.position,
+    id: track.id, name: track.name, statuses: track.statuses.split(",").filter(Boolean), check_domain: track.check_domain === 1, position: track.position, keep_releases: track.keep_releases,
     releases: stats?.releases ?? 0, source: source ? await serializeSource(ctx, source) : null,
     created_at: iso(track.created_at), updated_at: iso(track.updated_at),
   }
@@ -423,7 +423,7 @@ async function tracksRoute(ctx: Context, owner: FileOwner, segments: string[]): 
       const body = await readJson(request)
       if (body instanceof Response) return body
       const updated = await updateTrack(env, owner, track, body)
-      return "error" in updated ? fail(updated.status, updated.status === 409 ? "status_in_another_track" : "invalid_track", updated.error) : reply(await serializeTrack(ctx, updated.track, await listSources(env, owner)))
+      return "error" in updated ? fail(updated.status, updated.status === 409 ? "status_in_another_track" : "invalid_track", updated.error) : reply({ ...(await serializeTrack(ctx, updated.track, await listSources(env, owner))), pruned: updated.pruned })
     }
     if (method === "DELETE") {
       const denied = need(ctx, "full")

@@ -18,7 +18,7 @@ export function openApiSpec(origin: string) {
   // A repository connected to an app or a licence (docs/repositories.md). Both owners have the same endpoints.
   const sourceDoc = "{ id, track_id, tag_prefix, connection (app | token), provider, repository, trigger, package_folder, has_token, enabled, webhook_url, webhook_secret, created_at, updated_at, last_delivery_at }. webhook_secret is omitted for read keys; the access token is never returned."
   const importDoc = "{ id, tag, version, commit, state (pending | imported | skipped | failed), detail, file_id, started_at, finished_at }"
-  const trackDoc = "{ id, name, statuses, check_domain, position, releases, source (see the track's /source) | null, created_at, updated_at }"
+  const trackDoc = "{ id, name, statuses, check_domain, position, keep_releases (null = every release is kept), releases, source (see the track's /source) | null, created_at, updated_at }"
   const trackParam = { name: "track", in: "path", required: true, description: "Track id (trk_...) or name.", schema: { type: "string" } }
   const trackBody = {
     type: "object",
@@ -27,6 +27,7 @@ export function openApiSpec(origin: string) {
       statuses: { description: "Status keys this track serves (array or comma separated). Each status belongs to one track of the app or licence at most." },
       check_domain: { type: "boolean", default: true },
       position: { type: "integer", minimum: 0 },
+      keep_releases: { type: ["integer", "null"], minimum: 1, maximum: 1000, description: "Release limit: the track keeps this many releases, the newest by version. Older ones are deleted with their files when a release is added, and at once when the limit is set or lowered (the response of a PATCH then has `pruned`). The newest stable and the newest beta release are never deleted. null keeps every release." },
     },
   }
   // Release tracks of an app or a licence, each with an optional connected repository (docs/releases.md, docs/repositories.md).
@@ -42,7 +43,7 @@ export function openApiSpec(origin: string) {
     [`${prefix}/tracks/{track}`]: {
       parameters: [param, trackParam],
       get: { summary: "A track", responses: { 200: { description: trackDoc }, 404: err } },
-      patch: { summary: "Change a track (permission: manage). Its statuses and domain check are applied to its releases.", requestBody: body(trackBody), responses: { 200: { description: trackDoc }, 409: err, 422: err } },
+      patch: { summary: "Change a track (permission: manage). Its statuses and domain check are applied to its releases. A new `keep_releases` deletes the releases beyond it now: the response adds `pruned`.", requestBody: body(trackBody), responses: { 200: { description: trackDoc }, 409: err, 422: err } },
       delete: {
         summary: "Delete a track (permission: full). Its releases move to `move_to`; refused while it has releases and no `move_to` is given.",
         parameters: [{ name: "move_to", in: "query", schema: { type: "string" } }],

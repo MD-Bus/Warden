@@ -24,7 +24,18 @@ A track is what a set of licence statuses receives. An app has one or more track
 - Each tagged app attachment follows its app's tracks, selected by its own status. Migrated custom project apps retain their old release overrides and inherit the original app's tracks for other statuses. New custom projects use an app of their own.
 - A status that no track serves receives no update.
 
-Create, rename and delete tracks on the *Releases* tab (*New track*, and the track's menu). Changing a track's statuses applies to all its releases at once. Deleting a track moves its releases to another track first.
+Create, rename and delete tracks on the *Releases* tab (*New track*, and the track's menu). Changing a track's statuses applies to all its releases at once. Deleting a track moves its releases to another track first. A track can also limit how many releases it keeps ([below](#release-limit)).
+
+### Release limit
+
+A track that publishes often grows without end. Give it a **release limit** (*Edit track*, *Keep the newest releases*) and Warden deletes the oldest releases, with their files, beyond that number:
+
+- It runs **whenever a release is added** (upload, API or repository import) and **when you lower the limit**. The edit dialog lists the releases that saving would delete, and the button says how many. Deleting cannot be undone; download anything you want to keep first.
+- "Oldest" is by **version**, not upload date: `1.10.0` is newer than `1.9.2`. Withdrawn releases count towards the limit.
+- The **newest stable release and the newest beta release are never deleted**, whatever the limit, because they are what sites are offered.
+- The release you have just added is kept even when its version is older than the others (a hotfix of an old line). The track then holds one more than its limit until the next release is added.
+- A repository import does not publish a deleted version again: the tag stays recorded as imported.
+- Leave the limit empty (the default) to keep every release. Attachments and other tracks are never touched. The limit is a whole number from 1 to 1000.
 
 Files without a version (attachments) are not in a track: each one keeps its own release rule ([files.md](files.md)).
 

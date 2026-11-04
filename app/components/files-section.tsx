@@ -14,7 +14,7 @@ import { Input } from "#/components/ui/input"
 import { NativeSelect } from "#/components/ui/native-select"
 import { Textarea } from "#/components/ui/textarea"
 import { defaultReleaseStatuses, evaluateFileAccess, MAX_FILE_BYTES } from "#/lib/files"
-import { CHANNELS, isValidVersion, latestRelease, MAX_CHANGELOG_LENGTH, sortForDisplay, type Channel } from "#/lib/releases"
+import { CHANNELS, isValidVersion, latestRelease, MAX_CHANGELOG_LENGTH, MAX_KEEP_RELEASES, releasesToPrune, sortForDisplay, type Channel } from "#/lib/releases"
 import { describeStatusKeys, splitStatusKeys, type StatusSet } from "#/lib/statuses"
 import { statusConflicts, trackOverlaps } from "#/lib/tracks"
 import { cn } from "#/lib/utils"
@@ -50,7 +50,7 @@ type LicenseState = { status: string; expires_at: number | null; domains: string
 export type SharedFiles = { appName: string; appHref: string; files: FileRow[]; statuses: StatusSet; tracks: TrackView[] }
 
 /** A release track as the pages send it: `statuses` are status keys. */
-export type TrackView = { id: string; name: string; statuses: string[]; check_domain: boolean }
+export type TrackView = { id: string; name: string; statuses: string[]; check_domain: boolean; keep_releases: number | null }
 
 /** A track of the page's owner, with the repository connected to it. */
 export type TrackPanel = { track: TrackView; source: SourceView | null; imports: ImportView[] }
@@ -283,6 +283,7 @@ export function FilesSection({
                 "For no status yet: its releases are not available to any licence."
               )}
               {replaced.length > 0 && ` For ${describeStatusKeys(replaced, set)}, this licence receives its own track instead.`}
+              {track.keep_releases !== null && ` Keeps the newest ${track.keep_releases} release${track.keep_releases === 1 ? "" : "s"}${list.length > track.keep_releases ? `; ${list.length} are stored` : ""}.`}
             </p>
           </div>
           {isShared ? (
@@ -402,7 +403,7 @@ export function FilesSection({
 
       <UploadDialog open={uploading} onOpenChange={setUploading} uploadPath={uploadPath} statuses={statusSet} ownerLabel={ownerLabel} tracks={ownTracks} />
       <EditDialog file={editing} onClose={() => setEditing(null)} statuses={statusSet} tracks={ownTracks} />
-      <TrackDialog track={trackDialog} onClose={() => setTrackDialog(null)} statuses={statusSet} tracks={ownTracks} />
+      <TrackDialog track={trackDialog} onClose={() => setTrackDialog(null)} statuses={statusSet} tracks={ownTracks} stored={Object.fromEntries(ownTracks.map((t) => [t.id, releases.filter((r) => !r.shared && r.file.track_id === t.id).map((r) => r.file)]))} />
       {deletingTrack && <DeleteTrackDialog track={deletingTrack} onClose={() => setDeletingTrack(null)} others={ownTracks.filter((t) => t.id !== deletingTrack.id)} releases={releases.filter((r) => !r.shared && r.file.track_id === deletingTrack.id).length} />}
 
       <Dialog open={removing !== null} onOpenChange={(next) => !next && setRemoving(null)}>
@@ -780,11 +781,12 @@ function TrackPicker({ tracks, value, onChange, statuses, disabled }: { tracks: 
 }
 
 /** Creates or edits a track. Statuses that another track serves cannot be chosen. */
-function TrackDialog({ track, onClose, statuses: statusSet, tracks }: { track: TrackView | "new" | null; onClose: () => void; statuses: StatusSet; tracks: TrackView[] }) {
+function TrackDialog({ track, onClose, statuses: statusSet, tracks, stored }: { track: TrackView | "new" | null; onClose: () => void; statuses: StatusSet; tracks: TrackView[]; stored: Record<string, FileRow[]> }) {
   const save = useFetcher<ActionResult>()
   const [name, setName] = useState("")
   const [selected, setSelected] = useState<string[]>([])
   const [checkDomain, setCheckDomain] = useState(true)
+  const [limit, setLimit] = useState("")
   const [submitted, setSubmitted] = useState(false)
   const editing = track !== null && track !== "new" ? track : null
 
@@ -793,6 +795,7 @@ function TrackDialog({ track, onClose, statuses: statusSet, tracks }: { track: T
     setName(editing?.name ?? (tracks.length === 0 ? "Releases" : ""))
     setSelected(editing?.statuses ?? [])
     setCheckDomain(editing?.check_domain ?? true)
+    setLimit(editing?.keep_releases ? String(editing.keep_releases) : "")
     setSubmitted(false)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [track])
@@ -803,6 +806,9 @@ function TrackDialog({ track, onClose, statuses: statusSet, tracks }: { track: T
 
   const taken = (key: string) => trackOverlaps(tracks.map((t) => ({ id: t.id, name: t.name, statuses: t.statuses.join(",") })), [key], editing?.id ?? null)[0]?.track ?? null
   const busy = save.state !== "idle"
+  const limitNumber = limit.trim() === "" ? null : Number(limit)
+  const limitValid = limitNumber === null || (Number.isInteger(limitNumber) && limitNumber >= 1 && limitNumber <= MAX_KEEP_RELEASES)
+  const doomed = editing && limitNumber !== null && limitValid ? releasesToPrune(stored[editing.id] ?? [], limitNumber) : []
   return (
     <Dialog open={track !== null} onOpenChange={(next) => !busy && !next && onClose()}>
       <DialogContent className="sm:max-w-lg" onOpenAutoFocus={(e) => e.preventDefault()}>
@@ -843,6 +849,19 @@ function TrackDialog({ track, onClose, statuses: statusSet, tracks }: { track: T
             Only for allowed sites (domain check)
             <HelpTip>{DOMAIN_HELP}</HelpTip>
           </label>
+          <div className="space-y-1.5">
+            <FieldLabel htmlFor="track-keep" help="The number of releases this track keeps. When a release is added, or this number is lowered, the oldest releases beyond it are deleted with their files. The newest stable release and the newest beta release are never deleted. Leave empty to keep every release.">
+              Keep the newest releases
+            </FieldLabel>
+            <Input id="track-keep" type="number" inputMode="numeric" min={1} max={MAX_KEEP_RELEASES} value={limit} onChange={(e) => setLimit(e.target.value)} placeholder="All releases" disabled={busy} className="w-40" />
+            {!limitValid && <p className="text-xs text-destructive">Enter a whole number from 1 to {MAX_KEEP_RELEASES}, or leave it empty.</p>}
+            {doomed.length > 0 && (
+              <p className="rounded-md bg-destructive/10 p-2 text-xs text-destructive">
+                Saving deletes the {doomed.length} oldest release{doomed.length === 1 ? "" : "s"} and {doomed.length === 1 ? "its file" : "their files"}: {doomed.slice(0, 6).map((f) => f.version).join(", ")}
+                {doomed.length > 6 ? `, and ${doomed.length - 6} more` : ""}. This cannot be undone.
+              </p>
+            )}
+          </div>
           {submitted && save.state === "idle" && save.data?.error && <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">{save.data.error}</div>}
         </div>
         <DialogFooter>
@@ -850,16 +869,17 @@ function TrackDialog({ track, onClose, statuses: statusSet, tracks }: { track: T
             Cancel
           </Button>
           <Button
-            disabled={busy || !name.trim()}
+            variant={doomed.length > 0 ? "destructive" : "default"}
+            disabled={busy || !name.trim() || !limitValid}
             onClick={() => {
               setSubmitted(true)
               save.submit(
-                { intent: editing ? "update-track" : "create-track", ...(editing ? { trackId: editing.id } : {}), name: name.trim(), statuses: selected.join(","), check_domain: String(checkDomain) },
+                { intent: editing ? "update-track" : "create-track", ...(editing ? { trackId: editing.id } : {}), name: name.trim(), statuses: selected.join(","), check_domain: String(checkDomain), keep_releases: limit.trim() },
                 { method: "post" }
               )
             }}
           >
-            {busy ? "Saving..." : editing ? "Save changes" : "Create track"}
+            {busy ? "Saving..." : doomed.length > 0 ? `Save and delete ${doomed.length}` : editing ? "Save changes" : "Create track"}
           </Button>
         </DialogFooter>
       </DialogContent>

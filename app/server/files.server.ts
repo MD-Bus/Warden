@@ -4,7 +4,7 @@ import { describeStatusKeys, parseStatusKeys, splitStatusKeys, type StatusSet } 
 import type { App } from "./apps.server"
 import type { License } from "./licenses.server"
 import { getStatusSetForApp, getStatusSetForLicense } from "./statuses.server"
-import { getTrack, overriddenStatuses, resolveTrackForRelease } from "./tracks.server"
+import { getTrack, overriddenStatuses, pruneTrack, resolveTrackForRelease } from "./tracks.server"
 import { hashObject } from "./storage.server"
 import { newId } from "./util.server"
 
@@ -222,6 +222,15 @@ export async function storeFile(env: Env, owner: FileOwner, input: StoreInput): 
   } catch (error) {
     await env.FILES.delete(key)
     throw error
+  }
+  // The track's release limit: a failure here must not fail an upload that has succeeded.
+  if (trackId) {
+    try {
+      const track = await getTrack(env, owner, trackId)
+      if (track) await pruneTrack(env, owner, track, now, id)
+    } catch (error) {
+      console.error("Release limit: could not delete older releases", error)
+    }
   }
   return { file: (await getFile(env, owner, id))! }
 }

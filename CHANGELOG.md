@@ -7,6 +7,10 @@ All notable changes, newest first. Warden follows [semantic versioning](https://
 - **0.6.0, trust**: end-to-end tests on real Cloudflare (GitHub App, private repositories, phone width, CI), backups and export, two-factor sign-in or Cloudflare Access, a complete OpenAPI description checked by tests, independent security review
 - **1.0.0**: the check response and the API are frozen
 
+**Unreleased** (version number to be decided; adds migration 0017):
+
+- **Release limit per track.** A track can keep only its newest N releases (1 to 1000). Older releases, by version, are deleted together with their files in R2 when a release is added (upload, API or repository import) and at once when the limit is set or lowered; the edit dialog lists what saving would delete. The newest stable and the newest beta release are never deleted, and a release that was just added is kept. No limit (the default) keeps every release. Tracks in the API have `keep_releases`, and `PATCH` reports `pruned`. See [releases.md](docs/releases.md#release-limit).
+
 ## 0.5.2 (2026-11-03)
 
 Security fix. No migration.

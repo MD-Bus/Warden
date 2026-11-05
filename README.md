@@ -12,7 +12,7 @@ with independent statuses, shared or separate expiry dates, and app-owned releas
 <a href="https://deploy.workers.cloudflare.com/?url=https://github.com/momardia54/Warden"><img src="https://deploy.workers.cloudflare.com/button" alt="Deploy to Cloudflare"></a>
 </p>
 
-> **Status: pre-1.0 — version 0.5.1 (2026-11-03).** This README describes the tagged app licensing model. The API and data model may still change before 1.0.0; every change is listed in [CHANGELOG.md](CHANGELOG.md). The Deploy button installs `main`; an approved build on `develop` becomes the default installation after its release pull request is merged. See [Roadmap.md](Roadmap.md) for versioning and [Security.md](Security.md) for the security model.
+> **Status: pre-1.0 — version 0.6.0 (2026-11-05).** This README describes the tagged app licensing model. The API and data model may still change before 1.0.0; every change is listed in [CHANGELOG.md](CHANGELOG.md). The Deploy button installs `main`; an approved build on `develop` becomes the default installation after its release pull request is merged. See [Roadmap.md](Roadmap.md) for versioning and [Security.md](Security.md) for the security model.
 
 ![Warden overview](docs/screenshots/overview.jpg)
 
@@ -37,6 +37,10 @@ Every attachment selects a status defined by its app. Completed can remain valid
 **Licence templates** prefill tags and optional apps. For example, a WordPress template supplies `parent-theme` and `child-theme`, leaving the customer's child-theme app to select. Required slots must be filled; optional slots may be skipped. Updating a template leaves existing licences intact.
 
 Tags are unique within a licence and separate from Git version tags or release tracks. Keep them stable once the site uses them. [Apps and licences](docs/apps.md) explains the model.
+
+## Version 0.6.0
+
+Release limit per track, accurate outdated and up-to-date sites, the optional `WARDEN_SIGNING_KEY` secret, and a clearer overview and licence list. Migrations run by themselves; site code needs no change. See the [upgrade notes](docs/upgrade-notes.md).
 
 ## Patch 0.5.1
 

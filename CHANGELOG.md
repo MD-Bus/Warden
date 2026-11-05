@@ -4,18 +4,28 @@ All notable changes, newest first. Warden follows [semantic versioning](https://
 
 **Next, towards 1.0.0** (details in [Roadmap.md](Roadmap.md)):
 
-- **0.6.0, trust**: end-to-end tests on real Cloudflare (GitHub App, private repositories, phone width, CI), backups and export, two-factor sign-in or Cloudflare Access, a complete OpenAPI description checked by tests, independent security review
+- **0.7.0, trust**: end-to-end tests on real Cloudflare (GitHub App, private repositories, phone width, CI), backups and export, two-factor sign-in or Cloudflare Access, a complete OpenAPI description checked by tests, independent security review
 - **1.0.0**: the check response and the API are frozen
 
-**Unreleased** (version number to be decided; adds migrations 0017 and 0018):
+## 0.6.0 (2026-11-05)
+
+Release limit per track, accurate site versions, the signing key in a Worker secret, and clearer overview and licence list. Migrations 0017 and 0018 run by themselves. See [upgrade-notes.md](docs/upgrade-notes.md).
+
+### Added
+
+- **Release limit per track.** A track can keep only its newest N releases (1 to 1000). Older releases, by version, are deleted together with their files in R2 when a release is added (upload, API or repository import) and at once when the limit is set or lowered; the edit dialog lists what saving would delete. The newest stable and the newest beta release are never deleted, and a release that was just added is kept. No limit (the default) keeps every release. Tracks in the API have `keep_releases`, and `PATCH` reports `pruned`. See [releases.md](docs/releases.md#release-limit).
+- **The signing key can live in a Worker secret instead of the database.** Set `WARDEN_SIGNING_KEY` to the stored key's JSON and remove the database copy, so reading D1 no longer gives away the key every site trusts for its updates. A secret that cannot be used is ignored while the database holds the key, and the licence's Integration tab shows where the private key is stored and why a secret is ignored. Warden now records the public key (`signing_key_public`): once recorded, a missing private key makes checks and downloads fail until it is restored, instead of silently creating a key that sites reject. See "The signing key" in [checking.md](docs/checking.md#the-signing-key).
+
+### Fixed
+
+- **Outdated and up-to-date sites are now accurate.** Sites are compared with the release their own check offers, on the channel they check (migration 0018 records it), so beta sites are no longer measured against stable releases. A site whose status receives no release is no longer counted as up to date; it has its own state, *No release for this status*. The licence page no longer loses the version state, and no longer marks releases as unavailable, on licences with a site limit or domain restrictions. A registered site keeps reporting its version while its licence is invalid (this stopped in 0.5.0). Equal versions written differently (`v1.4`, `1.4.0`) share a row. `GET /apps/{app}/versions` adds `up_to_date`, `no_release` and `not_reported`, and its rows add the same counts. `GET /licenses/{id}/activations` fills `version` again for licences with one app.
+
+### Changed
 
 - **Status badges in the licence list.** The Status column shows each attached app's status as its coloured badge (grouped when apps share one, with the tags when they differ), instead of "0 / 1 apps valid". On a phone, where only Licence and Status fit, the expiry is shown under the name, using the soonest date for licences with separate expiry dates.
 - **Expired licences stay in Needs attention.** A licence or app that expired in the last 30 days is listed on the overview with its renewal action. Licences made invalid by decision (Suspended, Disabled, Pending) are not listed, because a renewal does not change them. On a phone, rows in this list wrap instead of squeezing the licence name.
 - **Recent activity folds repeats.** Consecutive identical events (one site checking every few hours) show once with a count ("3×"). On a phone the time moves under the event, so the event stays readable.
 - **Faster overview.** The outdated-site counts run alongside the other reads instead of after them.
-- **The signing key can live in a Worker secret instead of the database.** Set `WARDEN_SIGNING_KEY` to the stored key's JSON and remove the database copy, so reading D1 no longer gives away the key every site trusts for its updates. A secret that cannot be used is ignored while the database holds the key, and the licence's Integration tab shows where the private key is stored and why a secret is ignored. Warden now records the public key (`signing_key_public`): once recorded, a missing private key makes checks and downloads fail until it is restored, instead of silently creating a key that sites reject. See "The signing key" in [checking.md](docs/checking.md#the-signing-key).
-- **Outdated and up-to-date sites are now accurate.** Sites are compared with the release their own check offers, on the channel they check (migration 0018 records it), so beta sites are no longer measured against stable releases. A site whose status receives no release is no longer counted as up to date; it has its own state, *No release for this status*. The licence page no longer loses the version state, and no longer marks releases as unavailable, on licences with a site limit or domain restrictions. A registered site keeps reporting its version while its licence is invalid (this stopped in 0.5.0). Equal versions written differently (`v1.4`, `1.4.0`) share a row. `GET /apps/{app}/versions` adds `up_to_date`, `no_release` and `not_reported`, and its rows add the same counts. `GET /licenses/{id}/activations` fills `version` again for licences with one app.
-- **Release limit per track.** A track can keep only its newest N releases (1 to 1000). Older releases, by version, are deleted together with their files in R2 when a release is added (upload, API or repository import) and at once when the limit is set or lowered; the edit dialog lists what saving would delete. The newest stable and the newest beta release are never deleted, and a release that was just added is kept. No limit (the default) keeps every release. Tracks in the API have `keep_releases`, and `PATCH` reports `pruned`. See [releases.md](docs/releases.md#release-limit).
 
 ## 0.5.2 (2026-11-03)
 

@@ -16,6 +16,15 @@ The export contains everything Warden stores, including the private signing key 
 
 Database migrations run by themselves on the first request after the update, and only move forward: to go back to an earlier version, restore the export.
 
+## 0.5 to 0.6
+
+Back up D1 first. Migrations 0017 (release limit per track) and 0018 (channel on reported versions) run by themselves. Site code needs no change: the check response and download links are the same.
+
+- API additions: tracks have `keep_releases` and `PATCH` reports `pruned`; `GET /apps/{app}/versions` adds `up_to_date`, `no_release` and `not_reported`; `GET /licenses/{id}/activations` fills `version` again for licences with one app.
+- A track keeps every release until you set a limit. Setting one deletes older releases and their files.
+- The first request records the public signing key as `signing_key_public`. From then on Warden does not create a new key by itself: if the private key is removed, checks and downloads fail until it is restored. Starting a new install on a new database still creates a new key.
+- Moving the private key to the `WARDEN_SIGNING_KEY` secret is optional: see [checking.md](checking.md#the-signing-key).
+
 ## 0.5.1 to 0.5.2
 
 No migration. `download_url` in check and download answers is now a signed link, `/download/t/<token>`, that does not contain the licence key ([files.md](files.md#download-links)). Site code that passes it to its updater as is needs no change. Code that reads the file id or the tag out of that address must read the response's `id` and `tag` fields instead. A link is valid for 7 days: code that stores it longer should run a new check before downloading.

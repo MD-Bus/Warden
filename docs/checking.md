@@ -101,6 +101,26 @@ Verify the body exactly as received, before parsing it: re-encoding the JSON cha
 
 The key pair is created the first time it is needed and stored in the installation's D1 database. Back up the database ([upgrade-notes.md](upgrade-notes.md#before-you-upgrade)): an installation started on a new, empty database has a new key, and sites that pin the old public key then reject every answer, keeping their last known state, until their code has the new key. `X-Warden-Key-Id` lets a site report which key signed an answer it rejected.
 
+**Keeping the private key out of the database (optional).** Anyone who can read the D1 database (an export, a leaked Cloudflare API token, a query bug) can read the private key and sign answers, and so updates, that every site accepts. To keep it in a Worker secret instead:
+
+1. Copy the stored key into the secret without displaying it:
+
+   ```bash
+   npx wrangler d1 execute <your-db> --remote --json --command "SELECT value FROM settings WHERE key = 'signing_key'" \
+     | jq -r '.[0].results[0].value' | npx wrangler secret put WARDEN_SIGNING_KEY
+   ```
+
+2. Keep a copy of that value offline, for example in a password manager. Once the database copy is removed it is the only way to restore the key.
+3. Open a licence, then its **Integration** tab. The public key must be unchanged and the line under it must say *Private key stored in the WARDEN_SIGNING_KEY secret, with a copy in the database*. Then confirm that a site's check still verifies. Do not continue if the tab says the secret is ignored: the database key is still the one in use.
+4. Remove the copy from the database: `npx wrangler d1 execute <your-db> --remote --command "DELETE FROM settings WHERE key = 'signing_key'"`. D1 Time Travel can restore earlier states of the database for its retention period, so the row stays recoverable from there until that period ends.
+
+What protects sites:
+
+- A secret that is not valid JSON, is not an Ed25519 private key, has a private half that does not match its public half, or holds a different key than the one in use is ignored while the database holds the key. The reason appears on the Integration tab and in the Worker log.
+- Warden records the public key in the database (`signing_key_public`). Once it is recorded, Warden never creates a new key by itself. If the private key is missing from both places, or the secret is unusable and the database copy has been removed, checks and downloads answer with an error until the secret is restored. Sites keep their last known state in the meantime, and the Integration tab reports the problem.
+
+Deleting a Worker deletes its secrets, and a new database has a new key unless `WARDEN_SIGNING_KEY` is set before the first request.
+
 ### Earlier signature (deprecated)
 
 `X-Warden-Signature`, the lowercase hex HMAC-SHA256 of the body keyed with the licence key, is still sent on answers for known keys and is **removed in 1.0.0**. Anyone holding the licence key can compute it, including the site's owner, so it only shows that a response was not altered in transit. Move site code to the Ed25519 signature.

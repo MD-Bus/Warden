@@ -2,11 +2,13 @@
  * The install's Ed25519 signing key. Check responses, download responses and release checksums are signed with it, so
  * a site verifies them with the public key alone: holding a licence key is not enough to forge a valid response.
  *
- * The key pair is generated on first use and stored in settings under the key signing_key (the private key as a JWK).
- * It never changes: sites pin the public key in their code. It lives in the database, so a new database means a new
- * key (see "Signing key" in docs/checking.md).
+ * The key pair is generated on first use and stored in settings under signing_key (the private key as a JWK). It can
+ * be moved to the WARDEN_SIGNING_KEY Worker secret so that reading the database does not give it away. It never
+ * changes: sites pin the public key in their code. The public half is recorded under signing_key_public, so a missing
+ * private key stops the install instead of replacing the key sites trust. See "The signing key" in docs/checking.md.
  */
 const KEY = "signing_key"
+const PUBLIC_KEY = "signing_key_public"
 
 export type SigningKey = {
   /** First 16 hex characters of the SHA-256 of the raw public key. Sent with every signature (X-Warden-Key-Id). */
@@ -18,6 +20,12 @@ export type SigningKey = {
   createdAt: number
   privateKey: CryptoKey
   publicCryptoKey: CryptoKey
+  /** Where the private key in use comes from. */
+  source: "secret" | "database"
+  /** Whether the database still holds the private key. */
+  databaseCopy: boolean
+  /** Why WARDEN_SIGNING_KEY is set but not used, or null. */
+  secretProblem: string | null
 }
 
 type StoredKey = { jwk: JsonWebKey; created_at: number }
@@ -58,9 +66,52 @@ export function getSigningKey(env: Env): Promise<SigningKey> {
   return cached
 }
 
+/** Signs and verifies a probe, because a JWK whose d and x disagree can import without error and then sign invalid answers. */
+async function halvesMatch(jwk: JsonWebKey): Promise<boolean> {
+  try {
+    const probe = encoder.encode("warden-signing-key-probe")
+    const privateKey = await crypto.subtle.importKey("jwk", jwk, { name: "Ed25519" }, false, ["sign"])
+    const publicKey = await crypto.subtle.importKey("raw", fromBase64url(jwk.x!), { name: "Ed25519" }, false, ["verify"])
+    return await crypto.subtle.verify({ name: "Ed25519" }, publicKey, await crypto.subtle.sign({ name: "Ed25519" }, privateKey, probe), probe)
+  } catch {
+    return false
+  }
+}
+
+/**
+ * The key from the WARDEN_SIGNING_KEY secret, which holds the JSON of the settings row ({"jwk": {...}, "created_at": ...})
+ * or the bare private JWK. Returns the key, or the reason it cannot be used. Both are null when the secret is not set.
+ */
+async function readSecret(env: Env): Promise<{ key: StoredKey | null; problem: string | null }> {
+  const raw = env.WARDEN_SIGNING_KEY?.trim()
+  if (!raw) return { key: null, problem: null }
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    return { key: null, problem: "it is not valid JSON" }
+  }
+  const value = (parsed ?? {}) as Partial<StoredKey> & JsonWebKey
+  const jwk = (value.jwk ?? value) as JsonWebKey
+  if (jwk.kty !== "OKP" || jwk.crv !== "Ed25519" || !jwk.d || !jwk.x) return { key: null, problem: "it is not an Ed25519 private JWK" }
+  const clean = { kty: jwk.kty, crv: jwk.crv, d: jwk.d, x: jwk.x }
+  if (!(await halvesMatch(clean))) return { key: null, problem: "its private key does not match its public key" }
+  return { key: { jwk: clean, created_at: Number(value.created_at) || 0 }, problem: null }
+}
+
 async function loadOrCreate(env: Env): Promise<SigningKey> {
-  let stored = await readStored(env)
+  const [secret, row, recorded] = await Promise.all([readSecret(env), readStored(env), readPublicKey(env)])
+  // The stored row is the key in use while it exists. Without it, the recorded public key tells which key sites trust.
+  const trusted = row?.jwk.x ?? recorded
+  let secretProblem = secret.problem
+  if (secret.key && trusted && secret.key.jwk.x !== trusted) secretProblem = "it holds a different key than the one sites trust"
+  if (secretProblem) console.error(`WARDEN_SIGNING_KEY is ignored: ${secretProblem}. Put the stored key in the secret (see docs/checking.md).`)
+
+  const fromSecret = secretProblem ? null : secret.key
+  let stored = fromSecret ? { jwk: fromSecret.jwk, created_at: fromSecret.created_at || row?.created_at || Date.now() } : row
   if (!stored) {
+    // A new key would make every site reject every answer, for good. An error can be repaired by restoring the secret.
+    if (recorded || secretProblem) throw new Error(`The signing key is missing: restore WARDEN_SIGNING_KEY${secretProblem ? ` (${secretProblem})` : ""}. See docs/checking.md.`)
     const pair = (await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"])) as CryptoKeyPair
     const { kty, crv, d, x } = (await crypto.subtle.exportKey("jwk", pair.privateKey)) as JsonWebKey
     // Two instances can create a key at the same moment: the first one stored wins, and both use it.
@@ -69,6 +120,11 @@ async function loadOrCreate(env: Env): Promise<SigningKey> {
       .run()
     stored = await readStored(env)
     if (!stored) throw new Error("The signing key could not be stored.")
+  }
+  if (recorded !== stored.jwk.x) {
+    await env.DB.prepare("INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at")
+      .bind(PUBLIC_KEY, stored.jwk.x, Date.now())
+      .run()
   }
   const raw = fromBase64url(stored.jwk.x!)
   const der = new Uint8Array(SPKI_PREFIX.length + raw.length)
@@ -82,7 +138,15 @@ async function loadOrCreate(env: Env): Promise<SigningKey> {
     createdAt: stored.created_at,
     privateKey: await crypto.subtle.importKey("jwk", stored.jwk, { name: "Ed25519" }, false, ["sign"]),
     publicCryptoKey: await crypto.subtle.importKey("raw", raw, { name: "Ed25519" }, false, ["verify"]),
+    source: fromSecret ? "secret" : "database",
+    databaseCopy: row !== null || !fromSecret,
+    secretProblem,
   }
+}
+
+async function readPublicKey(env: Env): Promise<string | null> {
+  const row = await env.DB.prepare("SELECT value FROM settings WHERE key = ?").bind(PUBLIC_KEY).first<{ value: string }>()
+  return row?.value ?? null
 }
 
 async function readStored(env: Env): Promise<StoredKey | null> {

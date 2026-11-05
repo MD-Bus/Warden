@@ -132,6 +132,8 @@ npx wrangler secret put ADMIN_PASSWORD
 npx wrangler secret put SESSION_SECRET     # optional but recommended: openssl rand -hex 32
 ```
 
+The signing key is stored in the database by default. It can be moved to the optional `WARDEN_SIGNING_KEY` secret: see [The signing key](docs/checking.md#the-signing-key).
+
 The database tables are created and upgraded by the Worker itself on the first request, so there is no migration step. Until the two admin secrets exist, the login page tells you what to add.
 
 R2 has to be activated once in the Cloudflare dashboard (it asks for a payment method, even for the free tier). Without it, everything works except the Files section, which says so.

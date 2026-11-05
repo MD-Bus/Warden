@@ -47,7 +47,8 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
     listAttachmentVersions(env, license.id),
     listActivations(env, license.id),
     recentActivity(env, license.id, 100),
-    getSigningKey(env),
+    // A missing signing key is reported on the Integration tab, where it can be repaired, instead of failing the page.
+    getSigningKey(env).catch(() => null),
     dailyTraffic(env, { license: license.id }, 30, now, "checks"),
   ])
   const domains = sites.map((s) => s.domain)
@@ -59,7 +60,8 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
       const check = buildCheckResponse(c, null, now, domains, statuses)
       // Availability here means "offered in this status": the domain and site rules depend on the site asking, and a
       // registered site has passed them. Evaluated with no domain, they would hide every release from limited licences.
-      const files = (await visibleFiles(env, c, null, check, now, statuses, origin)).map((f) => ({ ...f, available: f.statuses.includes(status) }))
+      // Listing files signs their links: without the signing key the list stays empty and the Integration tab reports why.
+      const files = signing ? (await visibleFiles(env, c, null, check, now, statuses, origin)).map((f) => ({ ...f, available: f.statuses.includes(status) })) : []
       const offered = files.filter((f) => f.available)
       const latest = { stable: latestRelease(offered, "stable")?.version ?? null, beta: latestRelease(offered, "beta")?.version ?? null }
       return {
@@ -95,7 +97,7 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
     blockedIps,
     traffic: traffic.series,
     origin,
-    signingKey: { publicKey: signing.publicKey, keyId: signing.keyId },
+    signingKey: signing && { publicKey: signing.publicKey, keyId: signing.keyId, source: signing.source, databaseCopy: signing.databaseCopy, secretProblem: signing.secretProblem },
   }
 }
 
@@ -438,7 +440,7 @@ function AppCard({ entry, separate }: { entry: AppEntry; separate: boolean }) {
   )
 }
 
-function IntegrationTab({ license, apps, origin, signingKey }: { license: LoaderData["license"]; apps: AppEntry[]; origin: string; signingKey: { publicKey: string; keyId: string } }) {
+function IntegrationTab({ license, apps, origin, signingKey }: { license: LoaderData["license"]; apps: AppEntry[]; origin: string; signingKey: LoaderData["signingKey"] }) {
   const checkUrl = `${origin}/check/${license.license_key}`
   const domain = license.last_check_domain ?? license.domains.split(",")[0]?.trim() ?? "example.com"
   const example = `curl "${checkUrl}?tag=${apps[0]?.tag ?? "default"}&domain=${domain || "example.com"}&version=1.0.0"`
@@ -475,8 +477,25 @@ function IntegrationTab({ license, apps, origin, signingKey }: { license: Loader
               installing it. It is public: it can verify signatures but not create them. Also available from GET /api/v1/signing-key.
             </HelpTip>
           </p>
-          <CopyField value={signingKey.publicKey} />
-          <p className="text-xs text-muted-foreground">Key ID {signingKey.keyId}</p>
+          {signingKey ? (
+            <>
+              <CopyField value={signingKey.publicKey} />
+              <p className="text-xs text-muted-foreground">
+                Key ID {signingKey.keyId}. Private key stored in {signingKey.source === "secret" ? `the WARDEN_SIGNING_KEY secret${signingKey.databaseCopy ? ", with a copy in the database" : ""}` : "the database"}.
+              </p>
+              {signingKey.secretProblem && (
+                <Alert variant="destructive">
+                  <AlertTitle>WARDEN_SIGNING_KEY is ignored</AlertTitle>
+                  <AlertDescription>The secret cannot be used because {signingKey.secretProblem}. The key in the database stays in use: do not remove it until this message is gone.</AlertDescription>
+                </Alert>
+              )}
+            </>
+          ) : (
+            <Alert variant="destructive">
+              <AlertTitle>The signing key is missing</AlertTitle>
+              <AlertDescription>Checks and downloads fail until the key is restored. Put the stored key back in the WARDEN_SIGNING_KEY secret. A new key is not created, because sites would reject every answer signed with it.</AlertDescription>
+            </Alert>
+          )}
         </div>
         <div className="space-y-1.5">
           <p className="text-sm font-medium">Example request</p>

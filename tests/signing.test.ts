@@ -160,3 +160,103 @@ test("API lists: every list answers { data, next } and pages with limit and curs
   assert.equal((await call("DELETE", "/ip-blocks/blk_missing")).json.error.code, "ip_block_not_found")
   assert.equal((await call("POST", "/protection", {})).status, 405)
 })
+
+const silently = async <T>(run: () => Promise<T>): Promise<T> => {
+  const errors = console.error
+  console.error = () => {}
+  try {
+    return await run()
+  } finally {
+    console.error = errors
+  }
+}
+
+async function storedRow(env: Env) {
+  return (await env.DB.prepare("SELECT value FROM settings WHERE key = 'signing_key'").first<{ value: string }>())!.value
+}
+
+async function anotherKey() {
+  resetSigningKeyCache()
+  const other = setup().env
+  await getSigningKey(other)
+  resetSigningKeyCache()
+  return storedRow(other)
+}
+
+const removeStoredKey = (env: Env) => env.DB.prepare("DELETE FROM settings WHERE key = 'signing_key'").run()
+
+test("the WARDEN_SIGNING_KEY secret is used when it holds the stored key, and on an empty database", async () => {
+  const { env } = setup()
+  const stored = await getSigningKey(env)
+  assert.equal(stored.source, "database")
+  const row = await storedRow(env)
+
+  // Same key in the secret while the row exists: the secret is used and the copy is reported.
+  resetSigningKeyCache()
+  const both = await getSigningKey({ ...env, WARDEN_SIGNING_KEY: row } as Env)
+  assert.deepEqual([both.publicKey, both.source, both.databaseCopy, both.secretProblem], [stored.publicKey, "secret", true, null])
+
+  // Database row removed: the secret alone signs, with the same public key.
+  resetSigningKeyCache()
+  await removeStoredKey(env)
+  const fromSecret = await getSigningKey({ ...env, WARDEN_SIGNING_KEY: row } as Env)
+  assert.deepEqual([fromSecret.publicKey, fromSecret.databaseCopy], [stored.publicKey, false])
+  assert.equal(await env.DB.prepare("SELECT COUNT(*) AS n FROM settings WHERE key = 'signing_key'").first("n"), 0, "a key from the secret is not written to the database")
+
+  // A bare JWK works too.
+  resetSigningKeyCache()
+  const bare = JSON.stringify((JSON.parse(row) as { jwk: JsonWebKey }).jwk)
+  assert.equal((await getSigningKey({ ...env, WARDEN_SIGNING_KEY: bare } as Env)).publicKey, stored.publicKey)
+
+  // A new install can start from the secret.
+  resetSigningKeyCache()
+  const fresh = setup().env
+  assert.equal((await getSigningKey({ ...fresh, WARDEN_SIGNING_KEY: row } as Env)).publicKey, stored.publicKey)
+})
+
+test("a WARDEN_SIGNING_KEY secret that cannot be used is ignored, and reported, while the stored key exists", async () => {
+  const { env } = setup()
+  const stored = await getSigningKey(env)
+  const row = await storedRow(env)
+  const other = await anotherKey()
+  const wrongHalf = JSON.parse(row) as { jwk: JsonWebKey }
+  wrongHalf.jwk.d = (JSON.parse(other) as { jwk: JsonWebKey }).jwk.d
+
+  for (const [value, problem] of [
+    ["not json", /valid JSON/],
+    ["null", /Ed25519/],
+    ['{"kty":"RSA"}', /Ed25519/],
+    [row.slice(0, -5), /valid JSON/],
+    [other, /different key/],
+    [JSON.stringify(wrongHalf), /does not match/],
+  ] as const) {
+    resetSigningKeyCache()
+    const used = await silently(() => getSigningKey({ ...env, WARDEN_SIGNING_KEY: value } as Env))
+    assert.equal(used.publicKey, stored.publicKey, "sites keep verifying with the key they trust")
+    assert.equal(used.source, "database")
+    assert.match(used.secretProblem ?? "", problem)
+  }
+})
+
+test("a new key is never created once sites trust one: removing the stored key without a usable secret fails", async () => {
+  const { env } = setup()
+  const stored = await getSigningKey(env)
+  const row = await storedRow(env)
+  const other = await anotherKey()
+  await removeStoredKey(env)
+
+  for (const secret of [undefined, "not json", row.slice(0, -5), `"${row}"`, other]) {
+    resetSigningKeyCache()
+    await assert.rejects(silently(() => getSigningKey({ ...env, WARDEN_SIGNING_KEY: secret } as Env)), /signing key is missing/)
+  }
+  assert.equal(await env.DB.prepare("SELECT COUNT(*) AS n FROM settings WHERE key = 'signing_key'").first("n"), 0, "no replacement key was stored")
+
+  // Restoring the secret repairs the install.
+  resetSigningKeyCache()
+  assert.equal((await getSigningKey({ ...env, WARDEN_SIGNING_KEY: row } as Env)).publicKey, stored.publicKey)
+})
+
+test("an unusable secret on an empty database fails instead of creating a key the secret does not hold", async () => {
+  resetSigningKeyCache()
+  await assert.rejects(silently(() => getSigningKey({ ...setup().env, WARDEN_SIGNING_KEY: "not json" } as Env)), /signing key is missing/)
+})

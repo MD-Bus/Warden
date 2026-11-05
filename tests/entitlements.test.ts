@@ -11,7 +11,7 @@ import { handleCheck } from "../app/server/check.server.ts"
 import { handleDownload } from "../app/server/download.server.ts"
 import { getSigningKey, resetSigningKeyCache } from "../app/server/signing.server.ts"
 import { createApp, listApps, versionsInUse } from "../app/server/apps.server.ts"
-import { createLicense, getLicense, scanLicenseEvents, overviewStats, queryLicenses } from "../app/server/licenses.server.ts"
+import { attentionLists, createLicense, getLicense, scanLicenseEvents, overviewStats, queryLicenses } from "../app/server/licenses.server.ts"
 import { storeFile, listFilesForLicense } from "../app/server/files.server.ts"
 import { createTrack } from "../app/server/tracks.server.ts"
 import { saveBundle, listAttachments, attachmentContext } from "../app/server/entitlements.server.ts"
@@ -423,4 +423,22 @@ test("a check without a tag registers the domain once, records every app in one 
     ["site_limit_reached", "site_limit_reached"],
   )
   assert.equal((s.db.raw.prepare("SELECT COUNT(*) AS n FROM activations").get() as any).n, 1)
+})
+
+test("the attention list reports the apps that expired, per tag, and skips apps made invalid by decision", async () => {
+  const s = await setup()
+  const past = new Date(Date.now() - 3 * 86_400_000).toISOString()
+  const future = new Date(Date.now() + 200 * 86_400_000).toISOString()
+  const create = async (body: Record<string, unknown>) => {
+    const res = await s.api("POST", "/licenses", body)
+    assert.equal(res.status, 201, JSON.stringify(res.json))
+    return res.json.id as string
+  }
+  const shared = await create({ name: "Shared", expiry_mode: "shared", expires_at: past, apps: [{ tag: "site", app: s.parent.id, status: "active" }] })
+  const separate = await create({ name: "Separate", expiry_mode: "separate", apps: [{ tag: "parent-theme", app: s.parent.id, status: "active", expires_at: past }, { tag: "child-theme", app: s.child.id, status: "active", expires_at: future }] })
+  await create({ name: "Suspended", expiry_mode: "shared", expires_at: past, apps: [{ tag: "site", app: s.parent.id, status: "suspended" }] })
+  await create({ name: "Separate, suspended", expiry_mode: "separate", apps: [{ tag: "site", app: s.parent.id, status: "suspended", expires_at: past }] })
+
+  const { lapsed } = await attentionLists(s.env)
+  assert.deepEqual(lapsed.map((l) => [l.id, l.lapsed_tags]).sort(), [[shared, ["site"]], [separate, ["parent-theme"]]].sort())
 })

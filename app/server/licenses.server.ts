@@ -3,8 +3,8 @@ import { attachmentContext, listAttachments, scanBundleEvents } from "./entitlem
 import { generateLicenseKey, normalizeDomain, parseDomains } from "../lib/license"
 import { defaultStatusKey, effectiveStatusKey, expirySources, findStatus, graceEndsAt, MAX_GRACE_DAYS, statusLabel, type StatusSet } from "../lib/statuses"
 import { deleteLicenseFiles } from "./files.server"
-import { getStatusSetForLicense, loadStatusSets, setForLicense, type StatusSets } from "./statuses.server"
-import { inView, SILENT_AFTER_DAYS } from "../lib/views"
+import { getStatusSetForLicense, loadStatusSets, setForApp, setForLicense, type StatusSets } from "./statuses.server"
+import { inView, LAPSED_ATTENTION_DAYS, SILENT_AFTER_DAYS } from "../lib/views"
 import { emitLicenseEvent } from "./webhooks.server"
 import { newId } from "./util.server"
 
@@ -456,8 +456,25 @@ export async function overviewStats(env: Env, now = Date.now()): Promise<Overvie
   return stats
 }
 
-/** Licences that need a decision: valid and expiring soon (soonest first), and valid but silent (longest first). */
-export async function attentionLists(env: Env, limit = 8, now = Date.now()): Promise<{ expiring: License[]; silent: License[] }> {
+export type LapsedLicense = License & { lapsed_at: number; lapsed_tags: string[] }
+
+/**
+ * The expiry that made a licence invalid in the last LAPSED_ATTENTION_DAYS, or null. Only a status that other statuses
+ * expire into counts: a licence set to Suspended or Disabled is invalid by decision, and renewing it changes nothing.
+ */
+function lapsedFacts(license: License, sets: StatusSets, now: number): { lapsed_at: number; lapsed_tags: string[] } | null {
+  const recent = (ts: number | null): ts is number => ts !== null && ts < now && ts > now - LAPSED_ATTENTION_DAYS * 86_400_000
+  if (license.apps?.length) {
+    const lapsed = license.apps.filter((a) => !a.valid && recent(a.expires_at) && expirySources(setForApp(sets, a.app_id), a.effective_status).length > 0)
+    return lapsed.length ? { lapsed_at: Math.max(...lapsed.map((a) => a.expires_at!)), lapsed_tags: lapsed.map((a) => a.tag) } : null
+  }
+  const set = setForLicense(sets, license)
+  if (!recent(license.expires_at) || inView(license, set, "valid", now)) return null
+  return expirySources(set, effectiveStatusKey(license, set, now)).length > 0 ? { lapsed_at: license.expires_at, lapsed_tags: [] } : null
+}
+
+/** Licences that need a decision: expiring soon (soonest first), lapsed recently (latest first), and silent (longest first). */
+export async function attentionLists(env: Env, limit = 8, now = Date.now()): Promise<{ expiring: License[]; silent: License[]; lapsed: LapsedLicense[] }> {
   const [sets, { results: rows }] = await Promise.all([
     loadStatusSets(env),
     env.DB.prepare(`${SELECT_LICENSES} WHERE l.expires_at IS NOT NULL OR l.expiry_mode = 'separate' OR l.last_check_at IS NULL OR l.last_check_at < ?`).bind(now - SILENT_AFTER_DAYS * 86_400_000).all<License>(),
@@ -465,7 +482,11 @@ export async function attentionLists(env: Env, limit = 8, now = Date.now()): Pro
   const hydrated = await hydrateLicenses(env, rows, now)
   const expiring = hydrated.filter((l) => inView(l, setForLicense(sets, l), "expiring", now)).sort((a, b) => (a.expires_at ?? 0) - (b.expires_at ?? 0))
   const silent = hydrated.filter((l) => inView(l, setForLicense(sets, l), "silent", now)).sort((a, b) => (a.last_check_at ?? a.created_at) - (b.last_check_at ?? b.created_at))
-  return { expiring: expiring.slice(0, limit), silent: silent.slice(0, limit) }
+  const lapsed = hydrated.flatMap((l) => {
+    const facts = lapsedFacts(l, sets, now)
+    return facts ? [{ ...l, ...facts }] : []
+  }).sort((a, b) => b.lapsed_at - a.lapsed_at)
+  return { expiring: expiring.slice(0, limit), silent: silent.slice(0, limit), lapsed: lapsed.slice(0, limit) }
 }
 
 export type RecentEvent = { id: number; at: number; event: Activity["event"]; status: string | null; domain: string | null; detail: string; ip: string | null; license_id: string; name: string; app_id: string | null }

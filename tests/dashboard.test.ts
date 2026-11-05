@@ -92,3 +92,21 @@ test("attention lists and recent events agree with the overview counts", async (
   assert.ok(events.every((e) => e.event === "change" && e.detail === "Licence created"))
   assert.equal((await recentEvents(env, 10, "check")).length, 0)
 })
+
+test("the attention lists keep recent expiries, not licences made invalid by decision", async () => {
+  const env = { DB: makeDb().DB } as unknown as Env
+  const now = Date.now()
+  const lapsed = await createLicense(env, { ...base, name: "Lapsed", expires_at: now - 3 * DAY })
+  await createLicense(env, { ...base, name: "Long gone", expires_at: now - 60 * DAY })
+  await createLicense(env, { ...base, name: "Fine", expires_at: now + 200 * DAY })
+  await createLicense(env, { ...base, name: "No expiry" })
+  await createLicense(env, { ...base, name: "Suspended", status: "suspended", expires_at: now - 3 * DAY })
+  await createLicense(env, { ...base, name: "Disabled", status: "disabled", expires_at: now - 3 * DAY })
+  await createLicense(env, { ...base, name: "Pending", status: "pending", expires_at: now - 3 * DAY })
+  await createLicense(env, { ...base, name: "Completed", status: "completed", expires_at: now - 3 * DAY })
+  const set = await createLicense(env, { ...base, name: "Set to Expired", status: "expired", expires_at: now - 5 * DAY })
+
+  const lists = await attentionLists(env, 8, now)
+  assert.deepEqual(lists.lapsed.map((l) => l.id), [lapsed.id, set.id])
+  assert.ok(!lists.expiring.some((l) => l.id === lapsed.id), "a lapsed licence is not also listed as expiring")
+})

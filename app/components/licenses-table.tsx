@@ -1,7 +1,9 @@
 import type { AttachmentFacts } from "#/lib/entitlements"
 import { Link, useNavigate } from "react-router"
 import { ArrowDown, ArrowUp } from "lucide-react"
-import { LicenseStatusBadge } from "#/components/status-badge"
+import { LicenseStatusBadge, StatusBadge } from "#/components/status-badge"
+import { useStatusSets } from "#/components/status-context"
+import { DEFAULT_COLOR, DEFAULT_STATUSES, findStatus, type StatusDef } from "#/lib/statuses"
 import { Ago } from "#/components/time"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "#/components/ui/table"
 import { daysUntil, describeExpiry, EXPIRING_WINDOW_DAYS } from "#/lib/views"
@@ -57,6 +59,46 @@ function Expiry({ ts }: { ts: number | null }) {
   )
 }
 
+/** The expiry shown under the licence name on phones, where the Expires column is hidden: the soonest date of its apps. */
+function PhoneExpiry({ license }: { license: LicenseRowData }) {
+  const dates = license.expiry_mode === "separate" ? (license.apps ?? []).flatMap((a) => (a.expires_at === null ? [] : [a.expires_at])) : license.expires_at === null ? [] : [license.expires_at]
+  if (!dates.length) return null
+  const ts = Math.min(...dates)
+  const past = ts < Date.now()
+  return (
+    <div className={cn("text-xs md:hidden", past ? "text-red-700 dark:text-red-400" : daysUntil(ts) <= EXPIRING_WINDOW_DAYS ? "text-amber-700 dark:text-amber-400" : "text-muted-foreground")}>
+      {past ? "Expired" : "Expires"} {describeExpiry(ts)}
+    </div>
+  )
+}
+
+/** The status sites receive for each attached app, grouped when several apps share one. */
+function AppStatuses({ apps }: { apps: AttachmentFacts[] }) {
+  const sets = useStatusSets()
+  const groups = new Map<string, { def: Pick<StatusDef, "label" | "color">; tags: string[] }>()
+  for (const a of apps) {
+    const def = findStatus(sets.byApp[a.app_id] ?? DEFAULT_STATUSES, a.effective_status) ?? { label: a.effective_status, color: DEFAULT_COLOR }
+    const key = `${def.label}|${def.color}`
+    const group = groups.get(key) ?? { def, tags: [] }
+    group.tags.push(a.tag)
+    groups.set(key, group)
+  }
+  const valid = apps.filter((a) => a.valid).length
+  return (
+    <div className="flex flex-col gap-1">
+      <div className="flex flex-wrap gap-1">
+        {[...groups.values()].map(({ def, tags }) => (
+          <span key={`${def.label}${def.color}`} title={tags.join(", ")} className="inline-flex flex-col items-start gap-1 sm:flex-row sm:items-center">
+            <StatusBadge status={def} />
+            {groups.size > 1 && <span className="font-mono text-[11px] whitespace-normal text-muted-foreground">{tags.join(", ")}</span>}
+          </span>
+        ))}
+      </div>
+      {apps.length > 1 && valid !== apps.length && <span className="text-xs whitespace-normal text-muted-foreground">{valid} of {apps.length} apps valid</span>}
+    </div>
+  )
+}
+
 function SortHead({ label, by, sort, onSort, className }: { label: string; by: SortKey; sort?: Sort; onSort?: (sort: Sort) => void; className?: string }) {
   if (!sort || !onSort) return <TableHead className={className}>{label}</TableHead>
   const active = sort.key === by
@@ -102,11 +144,12 @@ export function LicensesTable({ licenses, showApp = true, empty = "No licence ma
                 navigate(`/licenses/${l.id}`)
               }}
             >
-              <TableCell className="max-w-72">
+              <TableCell className="max-w-44 sm:max-w-72">
                 <Link to={`/licenses/${l.id}`} prefetch="intent" className="block truncate font-medium hover:underline">
                   {l.name}
                 </Link>
                 <div className="truncate text-xs text-muted-foreground">{l.customer_name || l.customer_email || <span className="font-mono">{l.license_key}</span>}</div>
+                <PhoneExpiry license={l} />
               </TableCell>
               {showApp && (
                 <TableCell className="hidden lg:table-cell">
@@ -120,7 +163,7 @@ export function LicensesTable({ licenses, showApp = true, empty = "No licence ma
                 </TableCell>
               )}
               <TableCell>
-                {l.apps?.length ? <span className="text-sm">{l.apps.filter((e) => e.valid).length} / {l.apps.length} apps valid</span> : <LicenseStatusBadge license={l} />}
+                {l.apps?.length ? <AppStatuses apps={l.apps} /> : <LicenseStatusBadge license={l} />}
               </TableCell>
               <TableCell className="hidden md:table-cell">
                 {l.expiry_mode === "separate" ? <div className="space-y-2">{l.apps?.map((e) => <div key={e.tag}><span className="font-mono text-xs text-muted-foreground">{e.tag}</span><Expiry ts={e.expires_at} /></div>)}</div> : <Expiry ts={l.expires_at} />}

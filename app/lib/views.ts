@@ -5,6 +5,8 @@ import { effectiveStatusKey, findStatus, type ExpiryFacts, type StatusSet } from
 export const EXPIRING_WINDOW_DAYS = 14
 /** Valid licences that no site has checked for this many days count as silent. */
 export const SILENT_AFTER_DAYS = 3
+/** How long after its expiry date a licence stays in the overview's attention list. */
+export const LAPSED_ATTENTION_DAYS = 30
 
 const DAY = 86_400_000
 

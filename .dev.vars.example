@@ -1,3 +1,4 @@
 ADMIN_USERNAME="admin"
 ADMIN_PASSWORD="change-me-please"
 # Optional: SESSION_SECRET="openssl rand -hex 32"
+# Optional: WARDEN_SIGNING_KEY='{"jwk":{...},"created_at":...}' (the signing key, kept out of the database; see docs/checking.md)

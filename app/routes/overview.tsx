@@ -11,7 +11,7 @@ import { Button } from "#/components/ui/button"
 import { StatusBadge } from "#/components/status-badge"
 import { useAllStatuses, useStatusLabel } from "#/components/status-context"
 import { DEFAULT_COLOR } from "#/lib/statuses"
-import { daysUntil, describeExpiry, EXPIRING_WINDOW_DAYS, SILENT_AFTER_DAYS, VIEW_LABELS } from "#/lib/views"
+import { daysUntil, describeExpiry, EXPIRING_WINDOW_DAYS, LAPSED_ATTENTION_DAYS, SILENT_AFTER_DAYS, VIEW_LABELS } from "#/lib/views"
 import { cn } from "#/lib/utils"
 import { dailyTraffic } from "~/server/analytics.server"
 import { requireAuth } from "~/server/auth.server"
@@ -23,8 +23,9 @@ export const meta: Route.MetaFunction = () => [{ title: "Overview | Warden" }]
 export async function loader({ request, context }: Route.LoaderArgs) {
   const env = context.cloudflare.env
   await requireAuth(request, env)
-  const [stats, attention, events, apps, traffic] = await Promise.all([overviewStats(env), attentionLists(env), recentEvents(env, 12), listApps(env), dailyTraffic(env, {}, 30, Date.now(), "checks")])
-  const outdated = await outdatedSitesByApp(env, apps)
+  // The outdated counts depend only on the apps, so they run alongside the other reads.
+  const appsWithOutdated = listApps(env).then(async (apps) => ({ apps, outdated: await outdatedSitesByApp(env, apps) }))
+  const [stats, attention, events, { apps, outdated }, traffic] = await Promise.all([overviewStats(env), attentionLists(env), recentEvents(env, 60), appsWithOutdated, dailyTraffic(env, {}, 30, Date.now(), "checks")])
   return { stats, attention, events, traffic: traffic.series, apps: apps.map((a) => ({ id: a.id, name: a.name, licenses: a.licenses, valid: a.valid, sites: a.sites, latest_version: a.latest_version, outdated: outdated[a.id] ?? 0 })) }
 }
 
@@ -35,7 +36,7 @@ export default function Overview({ loaderData }: Route.ComponentProps) {
   const statusLabel = useStatusLabel()
   const allStatuses = useAllStatuses()
   const byStatus = Object.entries(stats.byStatus).sort((a, b) => b[1] - a[1])
-  const needsAttention = attention.expiring.length + attention.silent.length
+  const needsAttention = attention.expiring.length + attention.lapsed.length + attention.silent.length
 
   return (
     <>
@@ -105,14 +106,14 @@ export default function Overview({ loaderData }: Route.ComponentProps) {
               <div className="flex items-start gap-3 rounded-lg border bg-card p-4 text-sm">
                 <CircleCheck className="mt-0.5 size-4 shrink-0 text-green-600" />
                 <p className="text-muted-foreground">
-                  No action required. No valid licence expires within {EXPIRING_WINDOW_DAYS} days, and every valid licence has been checked within {SILENT_AFTER_DAYS} days.
+                  No action required. No valid licence expires within {EXPIRING_WINDOW_DAYS} days, none expired in the last {LAPSED_ATTENTION_DAYS} days, and every valid licence has been checked within {SILENT_AFTER_DAYS} days.
                 </p>
               </div>
             ) : (
               <div className="divide-y rounded-lg border bg-card">
                 {attention.expiring.map((l) => (
                   <div key={`e-${l.id}`} className="flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3">
-                    <div className="min-w-0 flex-1">
+                    <div className="min-w-48 flex-1">
                       <Link to={`/licenses/${l.id}`} prefetch="intent" className="font-medium hover:underline">
                         {l.name}
                       </Link>
@@ -128,9 +129,29 @@ export default function Overview({ loaderData }: Route.ComponentProps) {
                     {l.expiry_mode === "separate" ? <Button asChild variant="outline" size="sm"><Link to={`/licenses/${l.id}`}>Renew apps</Link></Button> : <QuickExtend licenseId={l.id} />}
                   </div>
                 ))}
+                {attention.lapsed.map((l) => {
+                  const whole = !l.apps?.length || (l.expiry_mode !== "separate" && l.lapsed_tags.length === l.apps.length)
+                  return (
+                    <div key={`x-${l.id}`} className="flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3">
+                      <div className="min-w-48 flex-1">
+                        <Link to={`/licenses/${l.id}`} prefetch="intent" className="font-medium hover:underline">
+                          {l.name}
+                        </Link>
+                        <div className="text-xs text-muted-foreground">
+                          {l.apps?.length ? l.apps.map((a) => a.app_name).join(", ") : (l.app_name ?? "Standalone")}
+                          {l.customer_name ? `, ${l.customer_name}` : ""}
+                        </div>
+                      </div>
+                      <span className="text-sm text-red-700 tabular-nums dark:text-red-400">
+                        {whole ? `Expired ${describeExpiry(l.lapsed_at)}, sites see it as invalid` : `${l.lapsed_tags.join(", ")}: expired ${describeExpiry(l.lapsed_at)}, invalid`}
+                      </span>
+                      {l.expiry_mode === "separate" ? <Button asChild variant="outline" size="sm"><Link to={`/licenses/${l.id}`}>Renew apps</Link></Button> : <QuickExtend licenseId={l.id} />}
+                    </div>
+                  )
+                })}
                 {attention.silent.map((l) => (
                   <div key={`s-${l.id}`} className="flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3">
-                    <div className="min-w-0 flex-1">
+                    <div className="min-w-48 flex-1">
                       <Link to={`/licenses/${l.id}`} prefetch="intent" className="font-medium hover:underline">
                         {l.name}
                       </Link>
@@ -226,8 +247,8 @@ export default function Overview({ loaderData }: Route.ComponentProps) {
               <p className="p-6 text-center text-sm text-muted-foreground">No activity yet. Checks, downloads and changes appear here.</p>
             ) : (
               <ul className="divide-y">
-                {events.map((e) => (
-                  <li key={e.id} className="grid grid-cols-[1.25rem_minmax(0,1fr)_auto] items-baseline gap-3 px-4 py-2.5 text-sm">
+                {groupRepeats(events).slice(0, 12).map(({ event: e, count }) => (
+                  <li key={e.id} className="grid grid-cols-[1.25rem_minmax(0,1fr)] items-baseline gap-x-3 gap-y-0.5 px-4 py-2.5 text-sm sm:grid-cols-[1.25rem_minmax(0,1fr)_auto]">
                     <span className="translate-y-0.5 text-muted-foreground" title={e.event === "check" ? "Check" : e.event === "download" ? "Download" : "Change"}>
                       {e.event === "check" ? <RefreshCw className="size-3.5" /> : e.event === "download" ? <ArrowDownToLine className="size-3.5" /> : <SquarePen className="size-3.5" />}
                     </span>
@@ -244,7 +265,8 @@ export default function Overview({ loaderData }: Route.ComponentProps) {
                             : lowerFirst(e.detail)}
                       </span>
                     </span>
-                    <span className="text-xs whitespace-nowrap text-muted-foreground">
+                    <span className="col-start-2 flex items-baseline gap-2 text-xs whitespace-nowrap text-muted-foreground sm:col-start-auto">
+                      {count > 1 && <Badge variant="secondary" className="px-1.5 py-0 font-normal tabular-nums">{count}×</Badge>}
                       <Ago ts={e.at} />
                     </span>
                   </li>
@@ -256,6 +278,17 @@ export default function Overview({ loaderData }: Route.ComponentProps) {
       </div>
     </>
   )
+}
+
+/** Folds consecutive identical events (same licence, kind, status, domain and detail) into one row with a count, newest first. */
+function groupRepeats<T extends { license_id: string; event: string; status: string | null; domain: string | null; detail: string }>(events: T[]): { event: T; count: number }[] {
+  const out: { event: T; count: number }[] = []
+  for (const e of events) {
+    const last = out[out.length - 1]
+    if (last && last.event.license_id === e.license_id && last.event.event === e.event && last.event.status === e.status && last.event.domain === e.domain && last.event.detail === e.detail) last.count++
+    else out.push({ event: e, count: 1 })
+  }
+  return out
 }
 
 /** Activity details follow the licence name in a sentence: "Harbor Studio website downloaded: theme.zip". */

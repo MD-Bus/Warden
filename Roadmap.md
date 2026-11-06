@@ -1,6 +1,6 @@
 # Roadmap
 
-Warden is **pre-1.0** (current version: 0.6.0, 2026-11-05; next milestone: 0.7.0). The data model, the check response and the `/api/v1` endpoints can still change between 0.x versions; changes are listed in [CHANGELOG.md](CHANGELOG.md). Version 1.0.0 means the check response and API are stable and only change in backward compatible ways. The Deploy button installs `main`; the approved `develop` build becomes the default after its release pull request is merged.
+Warden is **pre-1.0** (current version: 0.6.2, 2026-11-06; next milestone: 0.7.0). The data model, the check response and the `/api/v1` endpoints can still change between 0.x versions; changes are listed in [CHANGELOG.md](CHANGELOG.md). Version 1.0.0 means the check response and API are stable and only change in backward compatible ways. The Deploy button installs `main`; the approved `develop` build becomes the default after its release pull request is merged.
 
 This is a plan, not a promise. Order can change.
 
@@ -61,6 +61,14 @@ Version 0.5.0 is prepared on `develop`. A version tag identifies the approved bu
 - [x] A track keeps the newest N releases; older ones are deleted with their files when a release is added or the limit is lowered (migration 0017)
 - [ ] Select several releases in a track and delete them in one step
 - [ ] A default release limit for tracks that are created automatically on the first upload
+
+### 0.6.2: faster page changes (2026-11-06)
+
+- [x] A link's prefetch serves the click, one database trip less at startup, later loading bar
+
+### 0.6.1: cancelled requests (2026-11-06)
+
+- [x] A cancelled request no longer leaves later requests waiting
 
 ### 0.6.0: release limit and signing key (2026-11-05)
 

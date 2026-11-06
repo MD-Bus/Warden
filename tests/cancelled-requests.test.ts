@@ -12,9 +12,29 @@ const stalledDb = { prepare: () => statement } as unknown as D1Database
 const settles = (promise: Promise<unknown>) =>
   Promise.race([promise.then(() => true), new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 200))])
 
-test("a request cancelled during the migration check does not hold up later requests", async () => {
+// One test: an instance remembers a finished check, so the steps depend on each other.
+test("a request cancelled during the migration check does not hold up later requests, and only a new install creates the table", async () => {
   void ensureMigrated(stalledDb, [])
-  assert.equal(await settles(ensureMigrated(makeDb().DB, [])), true)
+
+  let created = 0
+  const failing = {
+    prepare: (sql: string) => ({
+      run: async () => (created += sql.startsWith("CREATE") ? 1 : 0),
+      all: async () => Promise.reject(new Error("D1 unavailable")),
+    }),
+  } as unknown as D1Database
+  await assert.rejects(ensureMigrated(failing, []), /D1 unavailable/)
+  assert.equal(created, 0, "another failure does not create anything")
+
+  let reads = 0
+  const newInstall = {
+    prepare: (sql: string) => ({
+      run: async () => (created += sql.startsWith("CREATE") ? 1 : 0),
+      all: async () => (reads++ === 0 ? Promise.reject(new Error("D1_ERROR: no such table: d1_migrations: SQLITE_ERROR")) : { results: [] }),
+    }),
+  } as unknown as D1Database
+  assert.equal(await settles(ensureMigrated(newInstall, [])), true)
+  assert.equal(created, 1)
 })
 
 test("a request cancelled while loading the signing key does not hold up later requests", async () => {

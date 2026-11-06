@@ -15,7 +15,7 @@ Supported versions: only the latest release (there is no 1.0 yet, so none is lon
 | Dashboard login | One admin, from the Worker secrets `ADMIN_USERNAME` and `ADMIN_PASSWORD`. Credentials are compared in constant time. The session cookie is an opaque random token (`HttpOnly`, `SameSite=Lax`, `Secure` on HTTPS); the server keeps only its hash, so logging out or changing the password ends the session. |
 | Brute force | 8 failed logins per IP per 15 minutes locks that IP out; a global delay slows distributed guessing. IPs are stored hashed. |
 | CSRF | Every dashboard action rejects cross-origin posts, on top of `SameSite=Lax`. |
-| Dashboard pages | Strict Content-Security-Policy with a per-request nonce, `X-Frame-Options: DENY`, `no-store` caching, HSTS on HTTPS. |
+| Dashboard pages | Strict Content-Security-Policy with a per-request nonce, `X-Frame-Options: DENY`, HSTS on HTTPS. Pages are `no-store`; page data for in-app navigation may stay in the browser for 10 seconds (`private`, `Vary: Cookie`), and any change or logout rules it out. |
 | Request size | API bodies are read up to 64 KB and check bodies up to 4 KB, stopping at the limit even without a Content-Length. Uploads are capped at 100 MB before anything is stored. |
 | API keys | `wk_` plus 40 uniformly random letters and digits. Only a SHA-256 hash is stored; the key is shown once. Three scopes (`read`, `manage`, `full`), revocable at any time. Keys act as the admin account, so give each app its own key with the least access it needs. |
 | Licence keys | `WRD-` plus 20 random characters from a 30-symbol alphabet (about 98 bits), generated with the platform's secure random source. Unknown keys get a generic 404. |

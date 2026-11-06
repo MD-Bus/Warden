@@ -7,7 +7,15 @@ All notable changes, newest first. Warden follows [semantic versioning](https://
 - **0.7.0, trust**: end-to-end tests on real Cloudflare (GitHub App, private repositories, phone width, CI), backups and export, two-factor sign-in or Cloudflare Access, a complete OpenAPI description checked by tests, independent security review
 - **1.0.0**: the check response and the API are frozen
 
-## 0.6.1 (unreleased)
+## 0.6.2 (unreleased)
+
+### Changed
+
+- **Moving between dashboard pages is faster.** Hovering a link already loaded its page, but `no-store` made the browser discard that and load it again on the click. Page data may now stay in the browser for 10 seconds, so the click usually needs no request. Any change or logout sets a new `wd_rev` cookie, and `Vary: Cookie` then rules out everything kept, so a change is never followed by old data.
+- **One trip to the database less when a Worker instance starts:** it reads the migrations table without creating it first.
+- **The loading bar appears after 300 ms**, up from 100, so an ordinary page change shows none.
+
+## 0.6.1 (2026-11-06)
 
 ### Fixed
 

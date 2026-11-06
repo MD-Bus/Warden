@@ -8,13 +8,13 @@ export function NavigationProgress() {
   const busy = navigation.state !== "idle" || fetchers.some((f) => f.state !== "idle")
   const [visible, setVisible] = useState(false)
 
-  // Wait a moment first so instant responses do not flash the bar.
+  // Wait first, so an ordinary page change shows no bar: it only appears when a page is taking time.
   useEffect(() => {
     if (!busy) {
       setVisible(false)
       return
     }
-    const timer = setTimeout(() => setVisible(true), 100)
+    const timer = setTimeout(() => setVisible(true), 300)
     return () => clearTimeout(timer)
   }, [busy])
 

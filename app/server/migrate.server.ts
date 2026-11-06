@@ -53,6 +53,21 @@ async function apply(db: D1Database, migration: Migration): Promise<void> {
   await db.prepare("INSERT OR IGNORE INTO d1_migrations (name) VALUES (?)").bind(migration.name).run()
 }
 
+/** One read on an existing install. CREATE TABLE only when needed: it would add a trip to the database to every start. */
+async function appliedOrCreate(db: D1Database): Promise<Set<string>> {
+  try {
+    return await appliedNames(db)
+  } catch (error) {
+    if (!/no such table/i.test(String(error instanceof Error ? error.message : error))) throw error
+  }
+  await db
+    .prepare(
+      "CREATE TABLE IF NOT EXISTS d1_migrations (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE, applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL)"
+    )
+    .run()
+  return appliedNames(db)
+}
+
 let migrated = false
 
 /**
@@ -64,12 +79,7 @@ let migrated = false
  */
 export async function ensureMigrated(db: D1Database, migrations: Migration[]): Promise<void> {
   if (migrated) return
-  await db
-    .prepare(
-      "CREATE TABLE IF NOT EXISTS d1_migrations (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE, applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL)"
-    )
-    .run()
-  const done = await appliedNames(db)
+  const done = await appliedOrCreate(db)
   for (const migration of [...migrations].sort((a, b) => a.name.localeCompare(b.name))) {
     if (!done.has(migration.name)) await apply(db, migration)
   }

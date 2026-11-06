@@ -53,27 +53,27 @@ async function apply(db: D1Database, migration: Migration): Promise<void> {
   await db.prepare("INSERT OR IGNORE INTO d1_migrations (name) VALUES (?)").bind(migration.name).run()
 }
 
-let ready: Promise<void> | null = null
+let migrated = false
 
-/** Cheap after the first call in an isolate. Safe to call on every request. */
-export function ensureMigrated(db: D1Database, migrations: Migration[]): Promise<void> {
-  if (!ready) {
-    ready = (async () => {
-      await db
-        .prepare(
-          "CREATE TABLE IF NOT EXISTS d1_migrations (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE, applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL)"
-        )
-        .run()
-      const done = await appliedNames(db)
-      for (const migration of [...migrations].sort((a, b) => a.name.localeCompare(b.name))) {
-        if (!done.has(migration.name)) await apply(db, migration)
-      }
-    })().catch((error) => {
-      ready = null // retry on the next request instead of caching the failure
-      throw error
-    })
+/**
+ * Cheap once an isolate has finished. Safe to call on every request.
+ *
+ * Only this boolean is shared, never a promise: the Workers runtime cancels a request when its client disconnects, and
+ * I/O started by a cancelled request never settles, which would leave every later request in the isolate waiting.
+ * Requests that arrive together each run the check instead; `apply` already handles that race.
+ */
+export async function ensureMigrated(db: D1Database, migrations: Migration[]): Promise<void> {
+  if (migrated) return
+  await db
+    .prepare(
+      "CREATE TABLE IF NOT EXISTS d1_migrations (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE, applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL)"
+    )
+    .run()
+  const done = await appliedNames(db)
+  for (const migration of [...migrations].sort((a, b) => a.name.localeCompare(b.name))) {
+    if (!done.has(migration.name)) await apply(db, migration)
   }
-  return ready
+  migrated = true
 }
 
 /** Response shown when the database cannot be brought up to date. */

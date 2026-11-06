@@ -34,8 +34,9 @@ const encoder = new TextEncoder()
 /** DER prefix of an Ed25519 SubjectPublicKeyInfo; the 32 key bytes follow it. */
 const SPKI_PREFIX = Uint8Array.from([0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x03, 0x21, 0x00])
 
-// One install has one key, which never changes, so it is kept for the life of the Worker instance once loaded.
-let cached: Promise<SigningKey> | null = null
+// One install has one key, which never changes, so it is kept for the life of the Worker instance once loaded. The
+// loaded key is kept, never the promise: a promise owned by a cancelled request would leave later requests waiting.
+let cached: SigningKey | null = null
 
 /** Forgets the loaded key. Only tests need this, since each test uses a fresh database. */
 export function resetSigningKeyCache() {
@@ -58,12 +59,8 @@ export function fromBase64url(s: string): Uint8Array<ArrayBuffer> {
   return Uint8Array.from(bin, (c) => c.charCodeAt(0))
 }
 
-export function getSigningKey(env: Env): Promise<SigningKey> {
-  cached ??= loadOrCreate(env).catch((error) => {
-    cached = null
-    throw error
-  })
-  return cached
+export async function getSigningKey(env: Env): Promise<SigningKey> {
+  return (cached ??= await loadOrCreate(env))
 }
 
 /** Signs and verifies a probe, because a JWK whose d and x disagree can import without error and then sign invalid answers. */

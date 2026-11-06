@@ -7,6 +7,12 @@ All notable changes, newest first. Warden follows [semantic versioning](https://
 - **0.7.0, trust**: end-to-end tests on real Cloudflare (GitHub App, private repositories, phone width, CI), backups and export, two-factor sign-in or Cloudflare Access, a complete OpenAPI description checked by tests, independent security review
 - **1.0.0**: the check response and the API are frozen
 
+## 0.6.1 (unreleased)
+
+### Fixed
+
+- **Requests no longer wait forever after a cancelled request.** The migration check and the signing key were shared between requests as promises owned by the first one. When that client disconnected, the promise could never settle, and later requests in the same Worker instance, including checks and downloads, waited until the client gave up. Each request now does its own work until one finishes, and only the finished result is kept.
+
 ## 0.6.0 (2026-11-05)
 
 Release limit per track, accurate site versions, the signing key in a Worker secret, and clearer overview and licence list. Migrations 0017 and 0018 run by themselves. See [upgrade-notes.md](docs/upgrade-notes.md).

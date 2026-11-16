@@ -26,7 +26,8 @@ export interface SourceProvider {
   /** Checks that the repository exists and can be read with the source's token. */
   checkAccess(source: ProviderSource): Promise<{ ok: true; private: boolean; id: number | null } | ProviderFailure>
   /** Whether `ref` (a tag or a commit) is part of `branch`: its commit is the head of the branch or one of its ancestors. */
-  branchContains(source: ProviderSource, branch: string, ref: string): Promise<{ contains: boolean } | ProviderFailure>
+  /** Whether the commit a tag points to is in a branch's history. Takes the tag's name: for an annotated tag, the SHA in a push event is the tag object's, which GitHub's compare does not resolve. */
+  branchContains(source: ProviderSource, branch: string, tag: string): Promise<{ contains: boolean } | ProviderFailure>
   /** Resolves a reference (tag, branch or commit) to its commit. */
   resolveCommit(source: ProviderSource, ref: string): Promise<{ commit: string } | ProviderFailure>
   /**

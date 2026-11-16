@@ -32,7 +32,7 @@ A track that publishes often grows without end. Give it a **release limit** (*Ed
 
 - It runs **whenever a release is added** (upload, API or repository import) and **when you lower the limit**. The edit dialog lists the releases that saving would delete, and the button says how many. Deleting cannot be undone; download anything you want to keep first.
 - "Oldest" is by **version**, not upload date: `1.10.0` is newer than `1.9.2`. Withdrawn releases count towards the limit.
-- The **newest stable release and the newest beta release are never deleted**, whatever the limit, because they are what sites are offered.
+- The **newest release of every channel is never deleted**, whatever the limit, because it is what sites on that channel are offered.
 - The release you have just added is kept even when its version is older than the others (a hotfix of an old line). The track then holds one more than its limit until the next release is added.
 - A repository import does not publish a deleted version again: the tag stays recorded as imported.
 - Leave the limit empty (the default) to keep every release. Attachments and other tracks are never touched. The limit is a whole number from 1 to 1000.
@@ -47,6 +47,17 @@ Labels say what kind of release it is: **Urgent**, **Security**, **Bug fix**, **
 - Removing a label from a track removes it from the track's releases. A release moved to another track keeps only the labels that track also has.
 - Labels are public: they appear in the check answer and the download list, in `labels`, as a list of keys (`["urgent", "security"]`, or `[]`).
 
+### Channels
+
+A channel is a line of releases within a track: **Stable** for every site, **Beta** for sites that test early builds, or any channel you add (*Edit track*, *Channels*), such as *Release candidate* or *Nightly*. Up to 10 per track.
+
+- **Stable always exists** and cannot be removed. A site that sends no channel, or a channel the track does not have, receives Stable. That is how every site built before channels existed keeps working.
+- A channel can also **receive the releases of other channels**. Beta includes Stable by default, so a beta site is offered the newest of both, as before. A *Nightly* channel that includes Stable and Beta is offered the newest release of the three.
+- A channel has a **key**, which sites send (`?channel=release-candidate`). It is made from the name and stays fixed once saved.
+- **Each channel can follow its own repository**, or the same repository on its own branch: Stable follows `main`, Beta follows `beta`, and a tag publishes on the channel whose branch has it ([repositories.md](repositories.md#channels-and-branches)).
+- A channel that has releases or a repository cannot be removed: move its releases to another channel and disconnect its repository first. A release moved to a track without its channel becomes Stable.
+- Tracks created before 0.8.0 have Stable and Beta until you change them.
+
 Files without a version (attachments) are not in a track: each one keeps its own release rule ([files.md](files.md)).
 
 **Earlier releases** (from before tracks existed) were put into tracks automatically, one per distinct release rule, so nobody gained or lost access. If two of them serve the same status, the *Releases* tab says so: edit the tracks until each status belongs to one.
@@ -56,7 +67,7 @@ Files without a version (attachments) are not in a track: each one keeps its own
 | Field | Meaning |
 |---|---|
 | **Version** | Numbers separated by dots (one to four), an optional leading `v`, an optional pre-release suffix and an optional build suffix. Examples: `1.4.0`, `v2.1`, `2.0.0-beta.1`, `2.0.0+build.7`. Versions are compared by semantic versioning precedence: `1.10.0` is newer than `1.9.2`, `2.0` equals `2.0.0`, and `2.0.0` is newer than `2.0.0-rc.1`. |
-| **Channel** | `stable` (default) or `beta`. Sites receive stable releases unless they ask for the beta channel, in which case they receive the newest of both. |
+| **Channel** | A channel of the track ([Channels](#channels)): `stable` (default), `beta`, or one the track defines. Sites receive stable releases unless they ask for another channel, in which case they receive the newest release of that channel and the channels it includes. |
 | **Release notes** | Public text (up to 10,000 characters) returned with the release, so a site can show "what's new" before installing. |
 | **Labels** | Public keys such as `urgent` or `security`, chosen among the labels of the release's track ([above](#release-labels)), returned with the release in `labels`. |
 | **Checksum** | The SHA-256 of the file, computed by Warden during the upload. Returned with the release and sent as the `X-Warden-Sha256` header of the download, so an updater can verify what it received. Files uploaded before checksums were introduced have none. |
@@ -112,11 +123,11 @@ GET https://<your-worker>/check/<licence key>?tag=parent-theme&domain=harborstud
 - `available` is `true` when `latest` is newer than `current`.
 - `labels` lists the keys of the release's labels, such as `urgent` ([release labels](#release-labels)); it is `[]` when the release has none.
 - `download_url` is a signed download link valid for 7 days ([files.md](files.md#download-links)). It carries the tag and domain and does not contain the licence key, so the site can hand it to its updater as is.
-- Add `&channel=beta` to receive beta releases too.
+- Add `&channel=beta` to receive beta releases too, or the key of another channel of the track. A channel the track does not have gives stable releases.
 - The whole response, `update` included, is signed with the installation's Ed25519 key ([checking.md](checking.md#verifying-the-signature)).
 - The `update` block appears only when the site sends a valid `version`. Older site code that does not send one gets the same response as before.
 
-Tag selects the app, its status selects a track, and channel selects stable/beta releases within that track. Versions from different apps are never compared.
+Tag selects the app, its status selects a track, and channel selects the channel within that track. Versions from different apps are never compared.
 
 The same fields can be sent in a POST body: `{ "tag": "parent-theme", "domain": "harborstudio.com", "version": "1.3.0", "channel": "beta" }`.
 
@@ -235,6 +246,6 @@ Hook the result into the `pre_set_site_transient_update_themes` (or `_plugins`) 
 
 - Give each audience its own track (Updates, Final build, Maintenance) rather than mixing them: what a licence receives then follows from its status, with nothing to calculate.
 - Upload each build with its version, and keep older releases in the track: they stay on record, and withdrawing the newest one makes the previous one the latest again.
-- Use the beta channel for early builds and promote a build by changing its channel to stable.
+- Use the beta channel for early builds and promote a build by changing its channel to stable. With a repository, let each channel follow its branch: tag on `beta` for testers, merge and tag on `main` for everyone.
 - Withdraw instead of deleting when a release turns out to be broken: sites stop being offered it, and you keep its record and download count.
 - Have the site verify the signature of the check, and the checksum and signature of the package, before installing anything.

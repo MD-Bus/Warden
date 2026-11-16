@@ -1,5 +1,6 @@
 import { buildCheckResponse, normalizeDomain } from "../lib/license"
-import { compareVersions, isChannel, latestRelease, readReportedVersion, type Channel } from "../lib/releases"
+import { compareVersions, latestRelease, readReportedVersion, type Channel } from "../lib/releases"
+import { readRequestedChannel } from "../lib/channels"
 import { contextsForLicense, type AppContext } from "./entitlements.server"
 import { getStatusSetForApp } from "./statuses.server"
 import { getSigningKey, signatureHeaders } from "./signing.server"
@@ -50,7 +51,7 @@ export async function handleBundleCheck(request: Request, env: Env, ctx: Executi
     return send({ error: { code: "tag_required", message: "Send tag with version, or send a versions object keyed by tag." } }, 422)
   const ip = clientIp(request)
   const versions = data.versions && typeof data.versions === "object" && !Array.isArray(data.versions) ? (data.versions as Record<string, unknown>) : {}
-  const channel: Channel = isChannel(pick("channel")) ? (pick("channel") as Channel) : "stable"
+  const channel: Channel = readRequestedChannel(pick("channel"))
   // Sites and status sets are read once for the whole request, not once per attached app.
   const [sets, sites] = await Promise.all([Promise.all(selected.map((c) => getStatusSetForApp(env, c.app_id))), license.max_sites !== null ? listActivations(env, license.id) : Promise.resolve([])])
   let activated = sites.map((a) => a.domain)
@@ -73,6 +74,7 @@ export async function handleBundleCheck(request: Request, env: Env, ctx: Executi
         const latest = latestRelease(
           files.filter((f) => f.available),
           channel,
+          (f) => f.channels,
         )
         check.update = { current: version, available: Boolean(latest && compareVersions(latest.version, version) > 0), latest: latest ? await releaseSummary(latest, signing) : null }
       }

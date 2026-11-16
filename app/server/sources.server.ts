@@ -31,6 +31,11 @@ import type { ProviderFailure, ProviderSource, SourceProvider } from "./source-p
 import { getTrack, listTracks, type ReleaseTrack } from "./tracks.server"
 import { json, newId } from "./util.server"
 import { prefixForTag, TAG_PREFIX_PATTERN, trackView } from "../lib/tracks"
+import { channelName, readTrackChannels, STABLE, type ChannelDef } from "../lib/channels"
+import type { WebhookEvent } from "./source-providers/types"
+
+/** A branch name as Git allows it, kept to the characters branch names use in practice. */
+export const BRANCH_PATTERN = /^(?!\/)(?!.*\.\.)(?!.*\/\/)[A-Za-z0-9._\/-]{1,200}(?<![/.])$/
 
 /** The implementation of each provider listed in app/lib/sources.ts. */
 const PROVIDER_IMPLEMENTATIONS: Record<ProviderKey, SourceProvider> = {
@@ -60,6 +65,10 @@ export type ReleaseSource = {
   track_id: string | null
   /** Tags this source publishes start with this ("" for v1.4.0, "final-" for final-v1.4.0). */
   tag_prefix: string
+  /** The channel of the track this source publishes into (stable by default). */
+  channel: string
+  /** The branch whose tags it publishes; "" takes tags made on any branch. */
+  branch: string
   created_at: number
   updated_at: number
   last_delivery_at: number | null
@@ -102,14 +111,14 @@ type Failure = { error: string; status: number }
 const ownerColumn = (owner: FileOwner) => ("license" in owner ? "license_id" : "app_id")
 const ownerId = (owner: FileOwner) => ("license" in owner ? owner.license.id : owner.app.id)
 
-/** The repositories connected to an app or licence, one per track. */
+/** The repositories connected to an app or licence, one per channel of a track. */
 export async function listSources(env: Env, owner: FileOwner): Promise<ReleaseSource[]> {
   return (await env.DB.prepare(`SELECT * FROM release_sources WHERE ${ownerColumn(owner)} = ? ORDER BY created_at`).bind(ownerId(owner)).all<ReleaseSource>()).results
 }
 
-/** The repository connected to a track, if any. */
-export function getSourceForTrack(env: Env, owner: FileOwner, trackId: string): Promise<ReleaseSource | null> {
-  return env.DB.prepare(`SELECT * FROM release_sources WHERE track_id = ? AND ${ownerColumn(owner)} = ?`).bind(trackId, ownerId(owner)).first<ReleaseSource>()
+/** The repository a channel of a track follows, if any. */
+export function getSourceForTrack(env: Env, owner: FileOwner, trackId: string, channel: string = STABLE): Promise<ReleaseSource | null> {
+  return env.DB.prepare(`SELECT * FROM release_sources WHERE track_id = ? AND channel = ? AND ${ownerColumn(owner)} = ?`).bind(trackId, channel, ownerId(owner)).first<ReleaseSource>()
 }
 
 export function getSourceById(env: Env, id: string): Promise<ReleaseSource | null> {
@@ -149,6 +158,8 @@ export type SourceInput = {
   package_folder?: unknown
   /** Tags this source publishes start with this prefix ("" by default). */
   tag_prefix?: unknown
+  /** Only tags made on this branch publish; "" (default) takes tags made on any branch. */
+  branch?: unknown
   /** Not accepted: a repository publishes into its track, which decides availability. */
   statuses?: unknown
   check_domain?: unknown
@@ -160,14 +171,16 @@ export type SourceInput = {
 }
 
 /**
- * Connects a repository to a track, or changes the connected one. The repository is checked with the provider first,
- * so a typo or a token without access is reported now rather than on the first tag.
+ * Connects a repository to a channel of a track, or changes the connected one. The repository is checked with the
+ * provider first, so a typo or a token without access is reported now rather than on the first tag.
  */
-export async function saveSource(env: Env, owner: FileOwner, track: ReleaseTrack, input: SourceInput, now = Date.now()): Promise<{ source: ReleaseSource; created: boolean } | Failure> {
+export async function saveSource(env: Env, owner: FileOwner, track: ReleaseTrack, input: SourceInput, now = Date.now(), channel: string = STABLE): Promise<{ source: ReleaseSource; created: boolean } | Failure> {
   if (input.statuses !== undefined || input.check_domain !== undefined) {
     return { error: `A repository publishes into its track ("${track.name}"), which decides which statuses receive its releases. Change the track instead.`, status: 422 }
   }
-  const current = await getSourceForTrack(env, owner, track.id)
+  const channels = readTrackChannels(track.channels)
+  if (!channels.some((c) => c.key === channel)) return { error: `The track "${track.name}" has no channel "${channel}". Its channels: ${channels.map((c) => c.key).join(", ")}.`, status: 422 }
+  const current = await getSourceForTrack(env, owner, track.id, channel)
   const provider = input.provider === undefined ? (current?.provider ?? "github") : input.provider
   if (!isProvider(provider))
     return {
@@ -197,15 +210,30 @@ export async function saveSource(env: Env, owner: FileOwner, track: ReleaseTrack
   const rawPrefix = input.tag_prefix === undefined ? (current?.tag_prefix ?? "") : input.tag_prefix
   if (typeof rawPrefix !== "string" || !TAG_PREFIX_PATTERN.test(rawPrefix.trim())) return { error: "The tag prefix may contain only letters, digits, dots, dashes, underscores and slashes, up to 40 characters.", status: 422 }
   const tagPrefix = rawPrefix.trim()
+  const rawBranch = input.branch === undefined ? (current?.branch ?? "") : input.branch
+  if (typeof rawBranch !== "string" || (rawBranch.trim() !== "" && !BRANCH_PATTERN.test(rawBranch.trim()))) return { error: "Enter a branch name such as main or beta, or leave it empty to take tags made on any branch.", status: 422 }
+  const branch = rawBranch.trim()
   if (input.enabled !== undefined && typeof input.enabled !== "boolean") return { error: "enabled must be true or false.", status: 422 }
   if (input.token !== undefined && typeof input.token !== "string") return { error: "token must be a string.", status: 422 }
   let token = input.token === undefined ? (current?.token ?? "") : (input.token as string).trim()
   if (token.length > 500 || /\s/.test(token)) return { error: "The access token is not valid.", status: 422 }
   const enabled = input.enabled === undefined ? (current?.enabled ?? 1) : input.enabled ? 1 : 0
 
-  // Two tracks fed by the same repository need different tag prefixes, or every tag would publish twice.
+  // Two tracks fed by the same repository need different tag prefixes, or every tag would publish twice. Within a
+  // track, channels can follow the same repository and prefix when each follows its own branch (one may follow none).
   const others = (await listSources(env, owner)).filter((o) => o.id !== current?.id)
-  const clash = others.find((o) => o.provider === provider && o.repository.toLowerCase() === repository.toLowerCase() && o.tag_prefix === tagPrefix)
+  const same = others.filter((o) => o.provider === provider && o.repository.toLowerCase() === repository.toLowerCase() && o.tag_prefix === tagPrefix)
+  const clash = same.find((o) => o.track_id !== track.id)
+  const sibling = same.find((o) => o.track_id === track.id && o.branch === branch)
+  if (sibling) {
+    const name = channelName(channels, sibling.channel)
+    return {
+      error: branch
+        ? `The channel ${name} already follows the branch ${branch} of ${repository}. Each channel of a track that follows the same repository needs its own branch.`
+        : `The channel ${name} already takes tags from any branch of ${repository}. Enter the branch this channel follows, for example beta.`,
+      status: 409,
+    }
+  }
   if (clash) {
     const tracks = await listTracks(env, owner)
     const name = tracks.find((t) => t.id === clash.track_id)?.name ?? "another track"
@@ -251,22 +279,24 @@ export async function saveSource(env: Env, owner: FileOwner, track: ReleaseTrack
 
   if (current) {
     await env.DB.prepare(
-      "UPDATE release_sources SET provider = ?, repository = ?, trigger = ?, package_folder = ?, tag_prefix = ?, statuses = ?, check_domain = ?, token = ?, enabled = ?, installation_id = ?, repository_id = ?, updated_at = ? WHERE id = ?",
+      "UPDATE release_sources SET provider = ?, repository = ?, trigger = ?, package_folder = ?, tag_prefix = ?, branch = ?, statuses = ?, check_domain = ?, token = ?, enabled = ?, installation_id = ?, repository_id = ?, updated_at = ? WHERE id = ?",
     )
-      .bind(provider, name, trigger, folder, tagPrefix, track.statuses, track.check_domain, token, enabled, installationId, repositoryId, now, current.id)
+      .bind(provider, name, trigger, folder, tagPrefix, branch, track.statuses, track.check_domain, token, enabled, installationId, repositoryId, now, current.id)
       .run()
     return { source: (await getSourceById(env, current.id))!, created: false }
   }
   const id = newId("src")
   await env.DB.prepare(
-    `INSERT INTO release_sources (id, app_id, license_id, track_id, tag_prefix, provider, repository, trigger, package_folder, statuses, check_domain, token, webhook_secret, enabled, installation_id, repository_id, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO release_sources (id, app_id, license_id, track_id, channel, branch, tag_prefix, provider, repository, trigger, package_folder, statuses, check_domain, token, webhook_secret, enabled, installation_id, repository_id, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   )
     .bind(
       id,
       "app" in owner ? owner.app.id : null,
       "license" in owner ? owner.license.id : null,
       track.id,
+      channel,
+      branch,
       tagPrefix,
       provider,
       name,
@@ -561,6 +591,18 @@ async function repack(env: Env, source: ReleaseSource, row: SourceImport, owner:
   return { row, sha256: hasher ? await hasher.digest() : null }
 }
 
+/**
+ * The channel a tag is published on: the channel of its source. A stable source that follows no branch keeps the rule
+ * from before channels: a version with a suffix (v2.0.0-beta.1) goes to beta, when the track has a beta channel.
+ */
+export function channelForImport(source: Pick<ReleaseSource, "channel" | "branch">, version: string, channels: ChannelDef[]): string {
+  if (source.channel === STABLE && !source.branch) {
+    const legacy = channelForVersion(version)
+    return channels.some((c) => c.key === legacy) ? legacy : STABLE
+  }
+  return source.channel
+}
+
 /** Step 3: records the package as a release of the track. */
 async function publish(env: Env, source: ReleaseSource, row: SourceImport, { owner, track }: { owner: FileOwner; track: ReleaseTrack }, sha256: string | null): Promise<Outcome> {
   const object = row.package_key ? await env.FILES.head(row.package_key) : null
@@ -569,7 +611,7 @@ async function publish(env: Env, source: ReleaseSource, row: SourceImport, { own
   const stored = await storeFile(env, owner, {
     name,
     version: row.version,
-    channel: channelForVersion(row.version),
+    channel: channelForImport(source, row.version, readTrackChannels(track.channels)),
     track: track.id,
     notes: `Published from ${PROVIDER_INFO[source.provider].host}/${source.repository}, tag ${row.ref}, commit ${row.commit_sha.slice(0, 7)}.`,
     contentType: "application/zip",
@@ -588,6 +630,47 @@ async function credentials(env: Env, source: ReleaseSource): Promise<ProviderSou
   if (!app) return { error: "The GitHub App is no longer connected. Connect GitHub again under Integrations, or switch this repository to an access token.", status: 502 }
   const token = await installationToken(app, source.installation_id)
   return "error" in token ? token : { ...source, token: token.token }
+}
+
+/**
+ * The source a tag publishes through, among the sources of one app or licence connected to the repository:
+ *   1. the tag prefix: the sources whose prefix the tag matches most specifically (they are all in one track);
+ *   2. the branch: a source that follows a branch takes only tags whose commit is in that branch, one that follows
+ *      none takes any tag;
+ *   3. when several remain (a commit in two branches, for example right after a merge): the source whose branch the
+ *      delivery names, then a source that follows a branch, then the track's first channel (stable).
+ * Returns why nothing was chosen otherwise.
+ */
+export async function selectSource(env: Env, sources: ReleaseSource[], event: Extract<WebhookEvent, { kind: "tag" }>): Promise<{ source: ReleaseSource } | { ignored: string }> {
+  const prefix = prefixForTag(event.tag, sources.map((s) => s.tag_prefix))
+  if (prefix === null) return { ignored: "No track of this repository takes tags with this name." }
+  const candidates = sources.filter((s) => s.tag_prefix === prefix)
+  if (candidates.length === 1 && !candidates[0].branch) return { source: candidates[0] }
+  const accepted: ReleaseSource[] = []
+  for (const source of candidates) {
+    if (!source.branch) {
+      accepted.push(source)
+      continue
+    }
+    if (event.branch === source.branch) {
+      accepted.push(source)
+      continue
+    }
+    const access = await credentials(env, source)
+    if ("error" in access) return { ignored: `Could not check the branch ${source.branch}: ${access.error}` }
+    const result = await PROVIDER_IMPLEMENTATIONS[source.provider].branchContains(access, source.branch, event.commit || event.tag)
+    if ("error" in result) return { ignored: `Could not check the branch ${source.branch}: ${result.error}` }
+    if (result.contains) accepted.push(source)
+  }
+  if (accepted.length === 0) return { ignored: `The tag is not on a branch a channel follows (${candidates.map((s) => s.branch).filter(Boolean).join(", ")}).` }
+  const track = candidates[0].track_id ? await env.DB.prepare("SELECT channels FROM release_tracks WHERE id = ?").bind(candidates[0].track_id).first<{ channels: string | null }>() : null
+  const order = readTrackChannels(track?.channels ?? null).map((c) => c.key)
+  const rank = (s: ReleaseSource) => [s.branch !== "" && s.branch === event.branch ? 0 : 1, s.branch ? 0 : 1, order.indexOf(s.channel) === -1 ? order.length : order.indexOf(s.channel)]
+  accepted.sort((a, b) => {
+    const [x, y] = [rank(a), rank(b)]
+    return x[0] - y[0] || x[1] - y[1] || x[2] - y[2]
+  })
+  return { source: accepted[0] }
 }
 
 /** Webhook deliveries are small; a tag push carries no file contents. */
@@ -615,11 +698,13 @@ export async function handleWebhook(request: Request, env: Env, ctx: ExecutionCo
     })
   if (event.kind === "ignored") return json({ ok: true, ignored: event.reason })
   if (source.enabled !== 1) return json({ ok: true, ignored: "The source is paused in Warden." })
-  // The tag belongs to the track of this repository whose prefix it matches most specifically (as for the GitHub App).
-  const siblings = (await env.DB.prepare("SELECT tag_prefix FROM release_sources WHERE repository = ? AND provider = ? AND app_id IS ? AND license_id IS ?")
+  // The tag goes to one source of this repository: by tag prefix, then by branch (selectSource, as for the GitHub App).
+  const siblings = (await env.DB.prepare("SELECT * FROM release_sources WHERE repository = ? AND provider = ? AND app_id IS ? AND license_id IS ?")
     .bind(source.repository, source.provider, source.app_id, source.license_id)
-    .all<{ tag_prefix: string }>()).results.map((r) => r.tag_prefix)
-  if (prefixForTag(event.tag, siblings) !== source.tag_prefix) return json({ ok: true, ignored: `This tag belongs to another track. Tags of this track start with "${source.tag_prefix}".` })
+    .all<ReleaseSource>()).results
+  const selected = await selectSource(env, siblings, event)
+  if ("ignored" in selected) return json({ ok: true, ignored: selected.ignored })
+  if (selected.source.id !== source.id) return json({ ok: true, ignored: `This tag is published by another channel or track of this repository (${selected.source.channel}${selected.source.branch ? `, branch ${selected.source.branch}` : ""}).` })
   const row = await startImport(env, ctx, source, event.tag, event.commit)
   return json(
     {
@@ -645,6 +730,7 @@ export async function applySourceForm(env: Env, ctx: ExecutionContext, owner: Fi
   if (!["save-source", "delete-source", "regenerate-source-secret", "import-tag", "retry-import"].includes(intent)) return null
   const track = await getTrack(env, owner, String(form.get("trackId") ?? ""))
   if (!track) return { error: "That track no longer exists. Reload the page." }
+  const channel = String(form.get("channel") ?? "") || STABLE
   if (intent === "save-source") {
     const text = (name: string) => (form.has(name) ? String(form.get(name)) : undefined)
     const flag = (name: string) => (form.has(name) ? form.get(name) === "true" : undefined)
@@ -655,14 +741,15 @@ export async function applySourceForm(env: Env, ctx: ExecutionContext, owner: Fi
       trigger: text("trigger"),
       package_folder: text("package_folder"),
       tag_prefix: text("tag_prefix"),
+      branch: text("branch"),
       // An empty token field keeps the current token; removing it is a separate checkbox.
       token: form.get("remove_token") === "true" ? "" : text("token") || undefined,
       enabled: flag("enabled"),
-    })
+    }, Date.now(), channel)
     return "error" in saved ? { error: saved.error } : { ok: true }
   }
-  const source = await getSourceForTrack(env, owner, track.id)
-  if (!source) return { error: "No repository is connected to this track. Reload the page." }
+  const source = await getSourceForTrack(env, owner, track.id, channel)
+  if (!source) return { error: "No repository is connected to this channel. Reload the page." }
   if (intent === "delete-source") await deleteSource(env, source)
   else if (intent === "regenerate-source-secret") await regenerateWebhookSecret(env, source)
   else if (intent === "import-tag") {
@@ -703,13 +790,14 @@ export async function handleAppWebhook(request: Request, env: Env, ctx: Executio
     await env.DB.prepare("SELECT * FROM release_sources WHERE provider = 'github' AND installation_id IS NOT NULL AND repository_id = ?").bind(event.repository_id).all<ReleaseSource>()
   ).results
   if (sources.length === 0) return json({ ok: true, ignored: "No app or licence in Warden is connected to this repository." })
-  // Within one app or licence, a tag goes to the track whose tag prefix it matches most specifically.
+  // Within one app or licence, a tag goes to one source: by tag prefix, then by branch (selectSource).
   const ownerKey = (s: ReleaseSource) => s.app_id ?? `l:${s.license_id}`
   const chosen = new Set<string>()
+  const ignored: string[] = []
   for (const key of new Set(sources.map(ownerKey))) {
-    const mine = sources.filter((s) => ownerKey(s) === key)
-    const prefix = prefixForTag(event.tag, mine.map((s) => s.tag_prefix))
-    for (const s of mine) if (prefix !== null && s.tag_prefix === prefix) chosen.add(s.id)
+    const selected = await selectSource(env, sources.filter((s) => ownerKey(s) === key), { ...event, repository: event.repository })
+    if ("source" in selected) chosen.add(selected.source.id)
+    else ignored.push(selected.ignored)
   }
   const imports = []
   for (const source of sources) {
@@ -722,17 +810,26 @@ export async function handleAppWebhook(request: Request, env: Env, ctx: Executio
     const row = await startImport(env, ctx, { ...source, repository: event.repository || source.repository }, event.tag, event.commit, now)
     imports.push({ source: source.id, id: row.id, tag: row.ref, version: row.version, state: row.state })
   }
-  return json({ ok: true, imports }, { status: imports.length > 0 ? 202 : 200 })
+  return json({ ok: true, imports, ...(ignored.length ? { ignored: ignored.join(" ") } : {}) }, { status: imports.length > 0 ? 202 : 200 })
 }
 
-/** The tracks of an app or licence for its page: each with its repository (without secrets) and its latest imports. */
+/**
+ * The tracks of an app or licence for its page: each with its channels, and for each channel its repository (without
+ * secrets) and its latest imports.
+ */
 export async function trackPanels(env: Env, owner: FileOwner, origin: string, importsPerSource = 5) {
   const [tracks, sources] = await Promise.all([listTracks(env, owner), listSources(env, owner)])
   return Promise.all(
     tracks.map(async (track) => {
-      const source = sources.find((s) => s.track_id === track.id) ?? null
-      const [view, imports] = source ? await Promise.all([publicSource(env, source, origin), listImports(env, source.id, importsPerSource)]) : [null, []]
-      return { track: trackView(track), source: view, imports }
+      const view = trackView(track)
+      const channels = await Promise.all(
+        view.channels.map(async (channel) => {
+          const source = sources.find((s) => s.track_id === track.id && s.channel === channel.key) ?? null
+          const [shown, imports] = source ? await Promise.all([publicSource(env, source, origin), listImports(env, source.id, importsPerSource)]) : [null, []]
+          return { channel: channel.key, source: shown, imports }
+        })
+      )
+      return { track: view, channels }
     })
   )
 }

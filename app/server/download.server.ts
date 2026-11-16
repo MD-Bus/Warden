@@ -2,7 +2,9 @@ import { contextsForLicense, type AppContext } from "./entitlements.server"
 import { evaluateFileAccess, type FileAccess } from "../lib/files"
 import { clientIp, reportUnknownKey } from "./guard.server"
 import { buildCheckResponse, KEY_PATTERN, normalizeDomain, type CheckResponse } from "../lib/license"
-import { isChannel, latestRelease, type Channel } from "../lib/releases"
+import { latestRelease, type Channel } from "../lib/releases"
+import { readRequestedChannel, type ChannelDef } from "../lib/channels"
+import { channelsByTrack } from "./tracks.server"
 import { splitLabelKeys } from "../lib/release-labels"
 import { describeStatusKeys, type StatusSet } from "../lib/statuses"
 import { getFileForLicense, listFilesForLicense, releaseRule, type LicenseFile } from "./files.server"
@@ -55,6 +57,8 @@ export type VisibleFile = {
   changelog: string
   /** Keys of the release's labels, as its track defines them. Empty for an attachment. */
   labels: string[]
+  /** The channels of the release's track, which decide which sites are offered it. */
+  channels: ChannelDef[]
   size: number
   sha256: string
   source: "licence" | "app"
@@ -75,7 +79,7 @@ export type VisibleFile = {
  */
 export async function visibleFiles(env: Env, license: License, domain: string | null, check: CheckResponse, now: number, set: StatusSet, origin: string): Promise<VisibleFile[]> {
   const files = (await listFilesForLicense(env, license)).filter((f) => f.withdrawn_at === null)
-  const signing = await getSigningKey(env)
+  const [signing, channelsOf] = await Promise.all([getSigningKey(env), channelsByTrack(env, files.map((f) => f.track_id))])
   return files.map((f) => {
     const rule = releaseRule(f, set)
     return {
@@ -85,6 +89,7 @@ export async function visibleFiles(env: Env, license: License, domain: string | 
       channel: f.channel,
       changelog: f.changelog,
       labels: splitLabelKeys(f.labels),
+      channels: channelsOf(f.track_id),
       size: f.size,
       sha256: f.sha256,
       source: f.app_id ? "app" : "licence",
@@ -228,10 +233,9 @@ async function legacyDownload(request: Request, env: Env, ctx: ExecutionContext,
   const check = buildCheckResponse(license, domain, now, activated, set)
 
   if (!fileId) {
-    const channelParam = url.searchParams.get("channel") ?? "stable"
-    const channel: Channel = isChannel(channelParam) ? channelParam : "stable"
+    const channel: Channel = readRequestedChannel(url.searchParams.get("channel"))
     const entries = await visibleFiles(env, license, domain, check, now, set, url.origin)
-    const latest = latestRelease(entries.filter((e) => e.available), channel)
+    const latest = latestRelease(entries.filter((e) => e.available), channel, (e) => e.channels)
     return reply(signing, { valid: check.valid, status: check.status, message: check.message, tag: context?.tag, app: context ? { id: context.app_id, slug: context.app_slug, name: context.app_name } : check.app, license_key: license.license_key, checked_at: check.checked_at, latest: latest ? await releaseSummary(latest, signing) : null, files: await Promise.all(entries.map((e) => publicEntry(e, signing))) }, 200)
   }
 

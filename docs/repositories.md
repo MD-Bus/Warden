@@ -64,6 +64,24 @@ GitHub sends a test delivery when the webhook is created; the section then shows
 | A version that is already published in the same track (and not withdrawn) | Skipped; withdraw or delete that release, then retry. Other tracks can publish the same version |
 
 With several tracks on one repository, a tag goes to the track whose prefix it matches most specifically: `final-v1.4.0` goes to `final-`, not to the track without prefix.
+
+The channel is that of the repository's channel ([Channels and branches](#channels-and-branches)). A Stable repository that follows no branch keeps the rule from before 0.8.0: a version with a suffix, such as `v2.0.0-beta.1`, goes to Beta.
+
+## Channels and branches
+
+Each channel of a track can follow a repository: in the track's card, every channel has its own *Connect repository*. Two channels can follow **the same repository on different branches**:
+
+| Channel | Repository | Branch |
+|---|---|---|
+| Stable | `harbor-studio/harbor-theme` | `main` |
+| Beta | `harbor-studio/harbor-theme` | `beta` |
+
+Pushing a tag still publishes, as before (branch pushes publish nothing). Warden asks GitHub which branch contains the tag's commit: a tag made on `beta` publishes on Beta, a tag made on `main` on Stable. When both branches contain the commit (right after merging `beta` into `main`, for example), the branch GitHub names in the delivery wins, then a channel that follows a branch, then Stable. A tag on no followed branch publishes nothing, and the delivery says why.
+
+- A channel without a branch takes tags made on any branch. In one track, only one channel of a repository can do that, and the others need their own branch.
+- Another track of the same repository still needs its own tag prefix.
+- Each channel's repository has its own settings, webhook (token connection), recent tags, *Publish a tag* and pause.
+- A channel can also follow a different repository, for example a separate repository for nightly builds.
 | A branch push | Nothing |
 
 The internal notes of each published release record the repository, the tag and the commit.
@@ -96,12 +114,12 @@ The section lists the latest tags with their state: *In progress* (with the curr
 
 ## API
 
-A track's repository is managed under the track: `/apps/{app}/tracks/{track}/source` (and `/apps/{app}/tracks/{track}/source`), where `{track}` is the track's id or name.
+A track's repositories are managed under the track: `/apps/{app}/tracks/{track}/source` (and `/licenses/{license}/tracks/{track}/source`), where `{track}` is the track's id or name. Add `?channel=beta` (or another channel key) to every path below for the repository of that channel; without it, the paths act on Stable's, as before 0.8.0. A channel the track does not have answers 404 `channel_not_found`. The track itself lists `source` (Stable's) and `sources` (every channel's).
 
 | Method and path | Scope | Description |
 |---|---|---|
 | `GET .../tracks/{track}/source` | read | The connected repository. `webhook_secret` is returned to keys with `manage` or `full` only; the access token is never returned (`has_token`) |
-| `PUT .../tracks/{track}/source` | manage | Connect or edit: `connection` (`app` or `token`; a new source uses `app` when the GitHub App is connected and no token is sent), `provider`, `repository`, `trigger`, `tag_prefix`, `package_folder`, `token` (`""` removes it), `enabled`. Fields left out keep their value |
+| `PUT .../tracks/{track}/source` | manage | Connect or edit: `connection` (`app` or `token`; a new source uses `app` when the GitHub App is connected and no token is sent), `provider`, `repository`, `trigger`, `tag_prefix`, `branch` (`""` for any branch), `package_folder`, `token` (`""` removes it), `enabled`. Fields left out keep their value |
 | `DELETE .../tracks/{track}/source` | manage | Disconnect |
 | `POST .../tracks/{track}/source/regenerate-secret` | manage | Replace the webhook secret |
 | `GET .../tracks/{track}/source/imports` | read | Latest tags and their state |
@@ -123,4 +141,8 @@ curl -X POST https://<worker>/api/v1/apps/harbor-theme/tracks \
 curl -X PUT "https://<worker>/api/v1/apps/harbor-theme/tracks/Final%20build/source" \
   -H "Authorization: Bearer $WARDEN_KEY" -H "Content-Type: application/json" \
   -d '{"repository":"harbor-studio/harbor-theme","tag_prefix":"final-","package_folder":"harbor-theme"}'
+# beta builds from the beta branch of the same repository, in the same track as stable
+curl -X PUT "https://<worker>/api/v1/apps/harbor-theme/tracks/Updates/source?channel=beta" \
+  -H "Authorization: Bearer $WARDEN_KEY" -H "Content-Type: application/json" \
+  -d '{"repository":"harbor-studio/harbor-theme","branch":"beta","package_folder":"harbor-theme"}'
 ```

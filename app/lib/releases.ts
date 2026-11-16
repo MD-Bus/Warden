@@ -3,18 +3,10 @@
  * been withdrawn. Files without a version are attachments: they can be downloaded but are never offered as an update.
  */
 
-/** Release channels. Stable releases are offered to every site; beta releases only to sites that ask for them. */
-export const CHANNELS = ["stable", "beta"] as const
-export type Channel = (typeof CHANNELS)[number]
+import { acceptedChannels, DEFAULT_CHANNELS, type ChannelDef } from "./channels"
 
-export function isChannel(value: unknown): value is Channel {
-  return typeof value === "string" && (CHANNELS as readonly string[]).includes(value)
-}
-
-/** The channels a site receives when it asks for `requested`: beta includes stable releases, stable only stable ones. */
-export function channelsFor(requested: Channel): Channel[] {
-  return requested === "beta" ? ["stable", "beta"] : ["stable"]
-}
+/** A release channel key: stable, beta, or a channel a track defines (see channels.ts). */
+export type Channel = string
 
 export const MAX_VERSION_LENGTH = 40
 export const MAX_CHANGELOG_LENGTH = 10_000
@@ -87,13 +79,13 @@ export function isRelease(file: ReleaseLike): boolean {
 
 /**
  * The release with the highest version among `files` in the channels `requested` receives. Ties keep the first entry,
- * so pass files newest first to prefer the most recent upload of a version.
+ * so pass files newest first to prefer the most recent upload of a version. `channelsOf` gives the channels of a
+ * file's track; without it, the default channels apply (stable, and beta which includes stable).
  */
-export function latestRelease<T extends ReleaseLike>(files: T[], requested: Channel = "stable"): T | null {
-  const channels = channelsFor(requested) as string[]
+export function latestRelease<T extends ReleaseLike>(files: T[], requested: Channel = "stable", channelsOf?: (file: T) => ChannelDef[]): T | null {
   let best: T | null = null
   for (const file of files) {
-    if (!isRelease(file) || !channels.includes(file.channel)) continue
+    if (!isRelease(file) || !acceptedChannels(channelsOf ? channelsOf(file) : DEFAULT_CHANNELS, requested).includes(file.channel)) continue
     if (!best || compareVersions(file.version, best.version) > 0) best = file
   }
   return best
@@ -141,16 +133,17 @@ export function readKeepReleases(raw: unknown): { keep: number | null } | { erro
 
 /**
  * The releases a track with the limit `keep` deletes: the oldest by version beyond the newest `keep`. Withdrawn
- * releases count towards the limit. The newest stable release and the newest beta release (the ones sites are offered)
- * are never returned, even when the limit is lower. Attachments (files without a version) are not releases.
+ * releases count towards the limit. The newest release of each channel (the one its sites are offered) is never
+ * returned, even when the limit is lower. Attachments (files without a version) are not releases.
  */
 export function releasesToPrune<T extends ReleaseLike & { id: string; uploaded_at: number }>(files: T[], keep: number | null): T[] {
   if (keep === null) return []
   const releases = sortForDisplay(files.filter((f) => f.version.trim() !== ""))
   if (releases.length <= keep) return []
   const kept = new Set(releases.slice(0, keep).map((f) => f.id))
-  for (const channel of CHANNELS) {
-    const offered = latestRelease(releases, channel)
+  // The newest release of every channel is what that channel's sites are offered: it is always kept.
+  for (const channel of new Set(releases.map((f) => f.channel))) {
+    const offered = latestRelease(releases.filter((f) => f.channel === channel), channel, () => [{ key: channel, name: channel, includes: [] }])
     if (offered) kept.add(offered.id)
   }
   return releases.filter((f) => !kept.has(f.id))

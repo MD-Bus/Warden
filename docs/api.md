@@ -131,7 +131,7 @@ Apps are referenced by id or slug. Files, tracks, status definitions and reposit
 | `GET, POST .../tracks/{track}/source/imports` | History or import `{ "tag": "v1.4.0" }` |
 | `POST .../source/imports/{id}/retry` | Retry an import |
 
-Upload query options: `name`, `version`, `track`, `statuses`, `check_domain`, `channel`, `changelog`, `labels` (label keys of the track, comma separated), `notes`. `PATCH` on a file takes `labels` as an array of keys and replaces them; a track's `labels` (`[{ key, name, color }]`) are set with `POST` or `PATCH` on the track ([releases.md](releases.md#release-labels)). Releases take their rule from their track; files without a version keep their own rule. See [files.md](files.md), [releases.md](releases.md), [statuses.md](statuses.md) and [repositories.md](repositories.md).
+Upload query options: `name`, `version`, `track`, `statuses`, `check_domain`, `channel`, `changelog`, `labels` (label keys of the track, comma separated), `notes`. `PATCH` on a file takes `labels` as an array of keys and replaces them; a track's `labels` (`[{ key, name, color }]`) and `channels` (`[{ key, name, includes }]`) are set with `POST` or `PATCH` on the track ([releases.md](releases.md#release-labels), [releases.md](releases.md#channels)); `channel` is one of the track's channels. A channel's repository: `?channel=<key>` on the track's `/source` paths ([repositories.md](repositories.md#channels-and-branches)). Releases take their rule from their track; files without a version keep their own rule. See [files.md](files.md), [releases.md](releases.md), [statuses.md](statuses.md) and [repositories.md](repositories.md).
 
 ## Other endpoints
 

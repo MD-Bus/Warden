@@ -41,7 +41,7 @@ export const github: SourceProvider = {
 
     // GitHub sends JSON, or a form field named payload when the webhook's content type is form-encoded.
     const text = (request.headers.get("content-type") ?? "").includes("application/x-www-form-urlencoded") ? (new URLSearchParams(body).get("payload") ?? "") : body
-    let payload: { ref?: unknown; deleted?: unknown; after?: unknown; repository?: { id?: unknown; full_name?: unknown } }
+    let payload: { ref?: unknown; base_ref?: unknown; deleted?: unknown; after?: unknown; repository?: { id?: unknown; full_name?: unknown } }
     try {
       payload = JSON.parse(text)
     } catch {
@@ -53,7 +53,9 @@ export const github: SourceProvider = {
     const commit = typeof payload.after === "string" && /^[0-9a-f]{40}$/.test(payload.after) ? payload.after : ""
     const repositoryId = typeof payload.repository?.id === "number" ? payload.repository.id : null
     const repository = typeof payload.repository?.full_name === "string" ? payload.repository.full_name : ""
-    return { kind: "tag", tag: ref.slice("refs/tags/".length), commit, repository_id: repositoryId, repository }
+    // GitHub names a branch (base_ref) when the tagged commit is the head of that branch.
+    const branch = typeof payload.base_ref === "string" && payload.base_ref.startsWith("refs/heads/") ? payload.base_ref.slice("refs/heads/".length) : null
+    return { kind: "tag", tag: ref.slice("refs/tags/".length), commit, repository_id: repositoryId, repository, branch }
   },
 
   async checkAccess(source) {
@@ -61,6 +63,15 @@ export const github: SourceProvider = {
     if (!response.ok) return failure(response, `the repository ${source.repository}`)
     const repo = (await response.json()) as { private?: boolean; id?: number }
     return { ok: true, private: repo.private === true, id: typeof repo.id === "number" ? repo.id : null }
+  },
+
+  async branchContains(source, branch, ref) {
+    // Comparing the branch with the tag: "identical" or "behind" means the tagged commit is in the branch's history.
+    const response = await fetch(`${API}/repos/${repoPath(source)}/compare/${encodeURIComponent(branch)}...${encodeURIComponent(ref)}`, { headers: headers(source) })
+    if (response.status === 404) return { contains: false }
+    if (!response.ok) return failure(response, `the branch "${branch}"`)
+    const result = (await response.json()) as { status?: string }
+    return { contains: result.status === "identical" || result.status === "behind" }
   },
 
   async resolveCommit(source, ref) {

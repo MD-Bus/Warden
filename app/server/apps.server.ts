@@ -2,6 +2,7 @@ import { isValidSlug, slugify } from "../lib/apps"
 import { compareVersions, latestRelease, siteUpdateState, type Channel } from "../lib/releases"
 import { defaultStatusKey, effectiveStatusKey, findStatus, MAX_GRACE_DAYS, type StatusSet } from "../lib/statuses"
 import { deleteAppFiles } from "./files.server"
+import { channelsByTrack } from "./tracks.server"
 import { parseGraceDays, parseOptionalCount, type LicenseInput } from "./licenses.server"
 import { getStatusSetForApp, loadStatusSets, setForApp } from "./statuses.server"
 import { newId } from "./util.server"
@@ -213,6 +214,7 @@ export async function versionsInUse(env: Env, appId: string, now = Date.now()): 
     const covered=new Set(own.results.flatMap((t) => t.statuses.split(",")))
     releases.results.push(...baseFiles.results.map((f) => ({...f,app_id:appId,statuses:f.statuses.split(",").filter((s) => !covered.has(s)).join(",")})))
   }
+  const channelsOf = await channelsByTrack(env, releases.results.map((r) => r.track_id))
   const appReleases = releases.results.filter((r) => r.app_id === appId)
   const latestOverall = latestRelease(appReleases)?.version ?? null
 
@@ -230,7 +232,7 @@ export async function versionsInUse(env: Env, appId: string, now = Date.now()): 
       if (r.license_id === site.license_id) return keys.includes(status)
       return r.app_id === appId && keys.includes(status) && !(r.track_id && replaced.has(status))
     })
-    const latest = latestRelease(offered, site.channel)?.version ?? null
+    const latest = latestRelease(offered, site.channel, (r) => channelsOf(r.track_id))?.version ?? null
     latestFor.set(cacheKey, latest)
     return latest
   }

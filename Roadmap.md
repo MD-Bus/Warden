@@ -1,6 +1,6 @@
 # Roadmap
 
-Warden is **pre-1.0** (current version: 0.7.0, 2026-11-15; next milestone: 0.8.0). The data model, the check response and the `/api/v1` endpoints can still change between 0.x versions; changes are listed in [CHANGELOG.md](CHANGELOG.md). Version 1.0.0 means the check response and API are stable and only change in backward compatible ways. The Deploy button installs `main`; the approved `develop` build becomes the default after its release pull request is merged.
+Warden is **pre-1.0** (current version: 0.8.0, unreleased; next milestone: 0.9.0). The data model, the check response and the `/api/v1` endpoints can still change between 0.x versions; changes are listed in [CHANGELOG.md](CHANGELOG.md). Version 1.0.0 means the check response and API are stable and only change in backward compatible ways. The Deploy button installs `main`; the approved `develop` build becomes the default after its release pull request is merged.
 
 This is a plan, not a promise. Order can change.
 
@@ -62,6 +62,11 @@ Version 0.5.0 is prepared on `develop`. A version tag identifies the approved bu
 - [ ] Select several releases in a track and delete them in one step
 - [ ] A default release limit for tracks that are created automatically on the first upload
 
+### 0.8.0: channels per track (unreleased)
+
+- [x] Channels defined per track, Stable and Beta by default, each able to include others (migration 0020)
+- [x] A repository and branch per channel; a tag publishes on the channel whose branch has it
+
 ### 0.7.0: release labels (2026-11-15)
 
 - [x] Labels with colours defined per track; releases carry them and sites receive them in `labels` (migration 0019)
@@ -90,7 +95,7 @@ Version 0.5.0 is prepared on `develop`. A version tag identifies the approved bu
 
 Version 1.0.0 freezes the check response and the API, so everything that would change them comes first. Trust work follows the completed licensing model.
 
-### 0.8.0: trust
+### 0.9.0: trust
 
 - [ ] **End-to-end tests on real Cloudflare**: the GitHub App flow with a real app, private repositories with a token, phone-width layout, and CI that deploys a throwaway Worker and runs the checks against it
 - [ ] **Backups and export**: documented and tested D1 export and restore, and a data export from the dashboard

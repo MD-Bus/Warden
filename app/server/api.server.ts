@@ -1,4 +1,5 @@
 import { readTrackLabels } from "../lib/release-labels"
+import { readTrackChannels } from "../lib/channels"
 import { getTemplate, listTemplates, saveTemplate, saveBundle, serializeBundle, renewBundle, listAttachments } from "./entitlements.server"
 import { KEY_PATTERN } from "../lib/license"
 import { DEFAULT_STATUSES, defaultStatusKey, findStatus, type StatusSet } from "../lib/statuses"
@@ -371,11 +372,15 @@ async function serializeSource(ctx: Context, source: ReleaseSource) {
 
 async function serializeTrack(ctx: Context, track: ReleaseTrack, sources: ReleaseSource[]) {
   const stats = await ctx.env.DB.prepare("SELECT COUNT(*) AS releases FROM files WHERE track_id = ?").bind(track.id).first<{ releases: number }>()
-  const source = sources.find((s) => s.track_id === track.id)
+  // `source` is the stable channel's repository, as before channels; `sources` lists every channel's.
+  const mine = sources.filter((s) => s.track_id === track.id)
+  const source = mine.find((s) => s.channel === "stable")
   return {
     id: track.id, name: track.name, statuses: track.statuses.split(",").filter(Boolean), check_domain: track.check_domain === 1, position: track.position, keep_releases: track.keep_releases,
     labels: readTrackLabels(track.labels),
+    channels: readTrackChannels(track.channels),
     releases: stats?.releases ?? 0, source: source ? await serializeSource(ctx, source) : null,
+    sources: await Promise.all(mine.map((s) => serializeSource(ctx, s))),
     created_at: iso(track.created_at), updated_at: iso(track.updated_at),
   }
 }
@@ -448,16 +453,19 @@ async function tracksRoute(ctx: Context, owner: FileOwner, segments: string[]): 
   }
 
   if (sub !== "source") return unknownEndpoint()
+  // Each channel of the track can follow its own repository: ?channel= selects it (stable by default).
+  const channel = url.searchParams.get("channel") || "stable"
+  if (!readTrackChannels(track.channels).some((c) => c.key === channel)) return fail(404, "channel_not_found", `The track has no channel "${channel}".`)
   if (!part && method === "PUT") {
     const denied = need(ctx, "manage")
     if (denied) return denied
     const body = await readJson(request)
     if (body instanceof Response) return body
-    const saved = await saveSource(env, owner, track, body)
+    const saved = await saveSource(env, owner, track, body, Date.now(), channel)
     return "error" in saved ? fail(saved.status, "invalid_source", saved.error) : reply(await serializeSource(ctx, saved.source), saved.created ? 201 : 200)
   }
-  const source = await getSourceForTrack(env, owner, track.id)
-  if (!source) return fail(404, "source_not_found", "No repository is connected to this track. Connect one with PUT.")
+  const source = await getSourceForTrack(env, owner, track.id, channel)
+  if (!source) return fail(404, "source_not_found", `No repository is connected to the ${channel} channel of this track. Connect one with PUT.`)
   if (!part) {
     if (method === "GET") return reply(await serializeSource(ctx, source))
     if (method === "DELETE") {
@@ -473,7 +481,7 @@ async function tracksRoute(ctx: Context, owner: FileOwner, segments: string[]): 
     const denied = need(ctx, "manage")
     if (denied) return denied
     await regenerateWebhookSecret(env, source)
-    return reply(await serializeSource(ctx, (await getSourceForTrack(env, owner, track.id))!))
+    return reply(await serializeSource(ctx, (await getSourceForTrack(env, owner, track.id, channel))!))
   }
   if (part === "imports") {
     if (!importId && method === "GET") {

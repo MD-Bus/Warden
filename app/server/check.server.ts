@@ -2,7 +2,8 @@ import { handleBundleCheck } from "./bundle-check.server"
 import { buildCheckResponse, KEY_PATTERN, normalizeDomain, type CheckResponse } from "../lib/license"
 import { clientIp, reportUnknownKey } from "./guard.server"
 import { applyRules } from "./protection.server"
-import { compareVersions, isChannel, latestRelease, readReportedVersion, type Channel } from "../lib/releases"
+import { compareVersions, latestRelease, readReportedVersion, type Channel } from "../lib/releases"
+import { readRequestedChannel } from "../lib/channels"
 import { DEFAULT_STATUSES } from "../lib/statuses"
 import { releaseSummary, visibleFiles } from "./download.server"
 import { getLicenseByKey, listActivations, recordActivation, type License } from "./licenses.server"
@@ -46,7 +47,7 @@ async function readCheckRequest(request: Request): Promise<CheckRequest> {
     tag: pick("tag"),
     domain: domainRaw ? normalizeDomain(domainRaw) : null,
     version: readReportedVersion(pick("version")),
-    channel: isChannel(channel) ? channel : "stable",
+    channel: readRequestedChannel(channel),
     nonce: nonce && NONCE_PATTERN.test(nonce) ? nonce : null,
   }
 }
@@ -78,7 +79,7 @@ export async function handleCheck(request: Request, env: Env, ctx: ExecutionCont
   const result: CheckResponse = { ...buildCheckResponse(license, domain, now, activated, set), license_key: key, domain, nonce, ...(tag !== null ? {tag} : {}) }
   if (license && version) {
     const files = await visibleFiles(env, license, domain, result, now, set, new URL(request.url).origin)
-    const latest = latestRelease(files.filter((f) => f.available), channel)
+    const latest = latestRelease(files.filter((f) => f.available), channel, (f) => f.channels)
     result.update = { current: version, available: Boolean(latest && compareVersions(latest.version, version) > 0), latest: latest ? await releaseSummary(latest, signing) : null }
   }
   const body = JSON.stringify(result)

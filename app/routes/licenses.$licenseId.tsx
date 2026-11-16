@@ -63,7 +63,9 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
       // Listing files signs their links: without the signing key the list stays empty and the Integration tab reports why.
       const files = signing ? (await visibleFiles(env, c, null, check, now, statuses, origin)).map((f) => ({ ...f, available: f.statuses.includes(status) })) : []
       const offered = files.filter((f) => f.available)
-      const latest = { stable: latestRelease(offered, "stable")?.version ?? null, beta: latestRelease(offered, "beta")?.version ?? null }
+      // The latest release per channel a site reported, each compared with what its own check is offered.
+      const latestOn = (channel: string) => latestRelease(offered, channel, (f) => f.channels)?.version ?? null
+      const latest = { stable: latestOn("stable") }
       return {
         id: e.id,
         tag: e.tag,
@@ -83,7 +85,7 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
         latest_version: latest.stable,
         // The dashboard shows the key-based address (the owner sees the key anyway); sites receive signed links.
         files: files.map(({ link: _link, ...f }) => ({ ...f, download_url: `${origin}/download/${license.license_key}/${f.id}?tag=${encodeURIComponent(e.tag)}` })),
-        versions: versions.filter((v) => v.attachment_id === e.id).map((v) => ({ ...v, state: siteUpdateState(v.version, latest[v.channel]) })),
+        versions: versions.filter((v) => v.attachment_id === e.id).map((v) => ({ ...v, state: siteUpdateState(v.version, latestOn(v.channel)) })),
         check_url: `${origin}/check/${license.license_key}?tag=${encodeURIComponent(e.tag)}`,
       }
     }),

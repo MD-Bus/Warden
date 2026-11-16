@@ -6,6 +6,7 @@
  * A licence of an app can have tracks of its own; for the statuses they cover, they replace the app's tracks.
  */
 
+import { readTrackChannels } from "./channels"
 import { readTrackLabels } from "./release-labels"
 
 export const MAX_TRACK_NAME = 60
@@ -68,11 +69,12 @@ export function prefixForTag(tag: string, prefixes: string[]): string | null {
 }
 
 /** A track as the dashboard shows it: status keys as a list, the domain check as a boolean. */
-export const trackView = (track: TrackLike & { check_domain: number; keep_releases: number | null; labels: string | null }) => ({
+export const trackView = (track: TrackLike & { check_domain: number; keep_releases: number | null; labels: string | null; channels: string | null }) => ({
   id: track.id,
   name: track.name,
   statuses: trackStatusKeys(track),
   check_domain: track.check_domain === 1,
   keep_releases: track.keep_releases,
   labels: readTrackLabels(track.labels),
+  channels: readTrackChannels(track.channels),
 })

@@ -16,9 +16,9 @@ export function openApiSpec(origin: string) {
   ]
 
   // A repository connected to an app or a licence (docs/repositories.md). Both owners have the same endpoints.
-  const sourceDoc = "{ id, track_id, tag_prefix, connection (app | token), provider, repository, trigger, package_folder, has_token, enabled, webhook_url, webhook_secret, created_at, updated_at, last_delivery_at }. webhook_secret is omitted for read keys; the access token is never returned."
+  const sourceDoc = "{ id, track_id, channel, branch (empty = tags made on any branch), tag_prefix, connection (app | token), provider, repository, trigger, package_folder, has_token, enabled, webhook_url, webhook_secret, created_at, updated_at, last_delivery_at }. webhook_secret is omitted for read keys; the access token is never returned."
   const importDoc = "{ id, tag, version, commit, state (pending | imported | skipped | failed), detail, file_id, started_at, finished_at }"
-  const trackDoc = "{ id, name, statuses, check_domain, position, keep_releases (null = every release is kept), labels ([{ key, name, color }], the labels its releases can carry), releases, source (see the track's /source) | null, created_at, updated_at }"
+  const trackDoc = "{ id, name, statuses, check_domain, position, keep_releases (null = every release is kept), labels ([{ key, name, color }], the labels its releases can carry), channels ([{ key, name, includes }]), releases, source (the stable channel's repository) | null, sources (every channel's repository), created_at, updated_at }"
   const trackParam = { name: "track", in: "path", required: true, description: "Track id (trk_...) or name.", schema: { type: "string" } }
   const trackBody = {
     type: "object",
@@ -27,12 +27,18 @@ export function openApiSpec(origin: string) {
       statuses: { description: "Status keys this track serves (array or comma separated). Each status belongs to one track of the app or licence at most." },
       check_domain: { type: "boolean", default: true },
       position: { type: "integer", minimum: 0 },
-      keep_releases: { type: ["integer", "null"], minimum: 1, maximum: 1000, description: "Release limit: the track keeps this many releases, the newest by version. Older ones are deleted with their files when a release is added, and at once when the limit is set or lowered (the response of a PATCH then has `pruned`). The newest stable and the newest beta release are never deleted. null keeps every release." },
+      keep_releases: { type: ["integer", "null"], minimum: 1, maximum: 1000, description: "Release limit: the track keeps this many releases, the newest by version. Older ones are deleted with their files when a release is added, and at once when the limit is set or lowered (the response of a PATCH then has `pruned`). The newest release of every channel is never deleted. null keeps every release." },
       labels: {
         type: "array",
         maxItems: 20,
         description: "Replaces the labels the track's releases can carry. A label without a key takes one from its name (Bug fix: bug_fix); send the key of an existing label to keep it while renaming it. A label removed here is removed from the track's releases. A new track gets urgent, security, bug_fix and feature.",
         items: { type: "object", required: ["name", "color"], properties: { key: { type: "string", pattern: "^[a-z][a-z0-9_]{0,31}$" }, name: { type: "string", maxLength: 30 }, color: { type: "string", pattern: "^#[0-9a-fA-F]{6}$" } } },
+      },
+      channels: {
+        type: "array",
+        maxItems: 10,
+        description: "Replaces the channels sites can follow (?channel=). stable is required, comes first and includes nothing. includes lists the channels whose releases a channel also receives (beta includes stable). A channel without a key takes one from its name. A channel that has releases or a repository cannot be removed (409). A new track gets stable and beta.",
+        items: { type: "object", required: ["name"], properties: { key: { type: "string", pattern: "^[a-z][a-z0-9_-]{0,31}$" }, name: { type: "string", maxLength: 30 }, includes: { type: "array", items: { type: "string" } } } },
       },
     },
   }
@@ -58,12 +64,15 @@ export function openApiSpec(origin: string) {
     },
     ...sourcePaths(`${prefix}/tracks/{track}`, [param, trackParam]),
   })
-  const sourcePaths = (prefix: string, params: Record<string, unknown>[]) => ({
+  const channelParam = { name: "channel", in: "query", description: "The channel of the track whose repository this is. Default: stable", schema: { type: "string", default: "stable" } }
+  const sourcePaths = (prefix: string, base: Record<string, unknown>[]) => {
+    const params = [...base, channelParam]
+    return {
     [`${prefix}/source`]: {
       parameters: params,
-      get: { summary: "The repository connected to the track", responses: { 200: { description: sourceDoc }, 404: { description: "No repository is connected" } } },
+      get: { summary: "The repository a channel of the track follows", responses: { 200: { description: sourceDoc }, 404: { description: "No repository is connected (source_not_found), or the track has no such channel (channel_not_found)" } } },
       put: {
-        summary: "Connect or edit the track's repository (permission: manage). Fields left out keep their value; the repository is checked with the provider first. Availability comes from the track.",
+        summary: "Connect or edit the repository of a channel (permission: manage). Fields left out keep their value; the repository is checked with the provider first. Availability comes from the track. Channels of one track can follow the same repository with different branches (409 otherwise); another track of the same repository needs a different tag prefix.",
         requestBody: {
           required: true,
           content: {
@@ -77,6 +86,7 @@ export function openApiSpec(origin: string) {
                   trigger: { type: "string", enum: ["tag"], default: "tag" },
                   package_folder: { type: "string", description: "Top-level folder inside the published zip. Defaults to the repository name." },
                   tag_prefix: { type: "string", description: "Tags of this track start with this text: \"final-\" takes final-v1.4.0. Default: no prefix." },
+                  branch: { type: "string", description: "Only tags whose commit is on this branch publish, on this channel. Empty (default): tags made on any branch; a stable source without a branch also sends tags with a suffix (v2.0.0-beta.1) to beta." },
                   token: { type: "string", description: "Access token for a private repository; empty string removes it" },
                   enabled: { type: "boolean", default: true },
                 },
@@ -102,11 +112,12 @@ export function openApiSpec(origin: string) {
       parameters: [...params, { name: "importId", in: "path", required: true, schema: { type: "string" } }],
       post: { summary: "Retry a failed or skipped tag (permission: manage)", responses: { 202: { description: importDoc }, 404: { description: "Unknown import" }, 409: { description: "In progress or already published" } } },
     },
-  })
+  }
+  }
   /** Query parameters of an upload that describe the file as a release. */
   const releaseParams = [
     { name: "version", in: "query", description: "Makes the file a release, offered as an update. Numbers separated by dots with an optional suffix: 1.4.0, 2.0.0-beta.1", schema: { type: "string", maxLength: 40 } },
-    { name: "channel", in: "query", description: "Beta releases are offered only to sites that check with channel=beta", schema: { enum: ["stable", "beta"], default: "stable" } },
+    { name: "channel", in: "query", description: "A channel of the release's track (stable and beta unless the track defines others). A release on a channel other than stable is offered only to sites that check with that channel, or with a channel that includes it", schema: { type: "string", default: "stable" } },
     { name: "changelog", in: "query", description: "Public release notes, returned to sites with the release. Can also be set afterwards with PATCH", schema: { type: "string", maxLength: 10000 } },
     { name: "labels", in: "query", description: "Releases: label keys of the release's track, comma separated (urgent,security). Sent to sites with the release", schema: { type: "string" } },
     { name: "notes", in: "query", description: "Internal notes, never sent to sites", schema: { type: "string" } },
@@ -167,12 +178,12 @@ export function openApiSpec(origin: string) {
         delete:{summary:"Delete a template, preserving existing licences (full)",responses:{200:{description:"{ deleted: true, id }"},403:err,404:err}},
       },
       "/check/{key}": {
-        servers:[{url:origin}], security:[], parameters:[{name:"key",in:"path",required:true,schema:{type:"string"}},{name:"tag",in:"query",schema:{type:"string"},description:"App attachment tag. Omit to check all apps. A multi-app response has apps and no top-level valid, status or update."},{name:"domain",in:"query",schema:{type:"string"}},{name:"version",in:"query",schema:{type:"string"},description:"Requires tag when the licence has several apps."},{name:"channel",in:"query",schema:{enum:["stable","beta"]}},{name:"nonce",in:"query",schema:{type:"string",pattern:"^[A-Za-z0-9._~-]{8,64}$"}}],
+        servers:[{url:origin}], security:[], parameters:[{name:"key",in:"path",required:true,schema:{type:"string"}},{name:"tag",in:"query",schema:{type:"string"},description:"App attachment tag. Omit to check all apps. A multi-app response has apps and no top-level valid, status or update."},{name:"domain",in:"query",schema:{type:"string"}},{name:"version",in:"query",schema:{type:"string"},description:"Requires tag when the licence has several apps."},{name:"channel",in:"query",schema:{type:"string",default:"stable"},description:"A channel of the track: stable (default), beta, or one the track defines. A channel the track does not have gives stable"},{name:"nonce",in:"query",schema:{type:"string",pattern:"^[A-Za-z0-9._~-]{8,64}$"}}],
         get:{summary:"Signed licence check by tag or for every app",responses:{200:{description:"A CheckResult, or { license_key, domain, nonce, checked_at, apps: CheckResult[] }. JSON is signed with X-Warden-Signature-Ed25519 over the raw body; X-Warden-Key-Id identifies the key."},403:err,404:err,422:err,429:err}},
-        post:{summary:"Check with JSON fields; versions can map each tag to its installed version",requestBody:body({type:"object",properties:{tag:{type:"string"},domain:{type:"string"},nonce:{type:"string"},version:{type:"string"},channel:{enum:["stable","beta"]},versions:{type:"object",additionalProperties:{type:"string"}}}}),responses:{200:{description:"Same signed response as GET"},404:err,422:err,429:err}},
+        post:{summary:"Check with JSON fields; versions can map each tag to its installed version",requestBody:body({type:"object",properties:{tag:{type:"string"},domain:{type:"string"},nonce:{type:"string"},version:{type:"string"},channel:{type:"string"},versions:{type:"object",additionalProperties:{type:"string"}}}}),responses:{200:{description:"Same signed response as GET"},404:err,422:err,429:err}},
       },
       "/download/{key}": {
-        servers:[{url:origin}],security:[],parameters:[{name:"key",in:"path",required:true,schema:{type:"string"}},{name:"tag",in:"query",schema:{type:"string"}},{name:"domain",in:"query",schema:{type:"string"}},{name:"channel",in:"query",schema:{enum:["stable","beta"]}}],
+        servers:[{url:origin}],security:[],parameters:[{name:"key",in:"path",required:true,schema:{type:"string"}},{name:"tag",in:"query",schema:{type:"string"}},{name:"domain",in:"query",schema:{type:"string"}},{name:"channel",in:"query",schema:{type:"string",default:"stable"},description:"A channel of the track: stable (default), beta, or one the track defines. A channel the track does not have gives stable"}],
         get:{summary:"Signed download list, grouped by app when tag is omitted",responses:{200:{description:"Selected app: { tag, app, valid, status, latest, files }. Several apps: { license_key, checked_at, apps: [...] }. Each file has a download_url: a signed link (/download/t/{token}) for that file and tag, valid 7 days, without the licence key."},404:err,429:err}},
       },
       "/download/t/{token}": {
@@ -477,7 +488,7 @@ export function openApiSpec(origin: string) {
           properties: {
             id: { type: "string" }, name: { type: "string" }, track: { type: ["string", "null"], description: "The track of a release; null for an attachment" },
             version: { type: "string", description: "Empty for an attachment. A file with a version is a release" },
-            channel: { enum: ["stable", "beta"] }, changelog: { type: "string", description: "Public release notes" }, notes: { type: "string", description: "Internal" },
+            channel: { type: "string", description: "A channel of the release's track" }, changelog: { type: "string", description: "Public release notes" }, notes: { type: "string", description: "Internal" },
             labels: { type: "array", items: { type: "string" }, description: "Keys of the release's labels, from its track's labels. Sent to sites with the release. Empty for an attachment" },
             size: { type: "integer" }, content_type: { type: "string" }, sha256: { type: ["string", "null"], description: "Hex SHA-256 of the file. null for files uploaded before checksums were recorded" },
             signature: { type: ["string", "null"], description: "Ed25519 signature of `sha256` (its 64 hex characters), base64; verify with GET /signing-key. null when `sha256` is null" },
@@ -493,7 +504,7 @@ export function openApiSpec(origin: string) {
             statuses: { type: "array", items: { type: "string" }, description: "Attachments only: a release is available according to its track" },
             check_domain: { type: "boolean", description: "Attachments only" },
             track: { type: "string", description: "Releases: move the release to this track (id or name)" },
-            version: { type: "string", description: "Empty string turns a release into an attachment" }, channel: { enum: ["stable", "beta"] },
+            version: { type: "string", description: "Empty string turns a release into an attachment" }, channel: { type: "string", description: "A channel of the release's track" },
             changelog: { type: "string", maxLength: 10000 }, notes: { type: "string", maxLength: 500 },
             labels: { type: "array", items: { type: "string" }, description: "Releases: replaces the labels, with label keys of the release's track. [] removes them all" },
             withdrawn: { type: "boolean", description: "true withdraws the release, false restores it" },

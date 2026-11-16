@@ -4,8 +4,23 @@ All notable changes, newest first. Warden follows [semantic versioning](https://
 
 **Next, towards 1.0.0** (details in [Roadmap.md](Roadmap.md)):
 
-- **0.8.0, trust**: end-to-end tests on real Cloudflare (GitHub App, private repositories, phone width, CI), backups and export, two-factor sign-in or Cloudflare Access, a complete OpenAPI description checked by tests, independent security review
+- **0.9.0, trust**: end-to-end tests on real Cloudflare (GitHub App, private repositories, phone width, CI), backups and export, two-factor sign-in or Cloudflare Access, a complete OpenAPI description checked by tests, independent security review
 - **1.0.0**: the check response and the API are frozen
+
+## 0.8.0 (2026-11-15)
+
+Channels per track, each following its own repository and branch. Migration 0020 runs by itself. Sites built for earlier versions keep working unchanged. See [upgrade-notes.md](docs/upgrade-notes.md).
+
+### Added
+
+- **Channels defined per track.** *Edit track*, *Channels*: Stable (fixed) and Beta by default, plus channels you add, such as Release candidate or Nightly, up to 10. A channel can also receive the releases of other channels (Beta includes Stable). Sites ask for a channel with `?channel=<key>`; no channel, or one the track does not have, gives Stable, exactly as before. A channel with releases or a repository cannot be removed. API: track `channels: [{ key, name, includes }]`. See [releases.md](docs/releases.md#channels).
+- **A repository and branch per channel.** Each channel of a track can follow its own repository, or the same repository on its own branch: Stable follows `main`, Beta follows `beta`. A pushed tag publishes on the channel whose branch contains its commit (Warden asks GitHub); a tag on no followed branch publishes nothing. API: `?channel=` on every `/tracks/{track}/source` path, `branch` on the source, and `sources` on the track. See [repositories.md](docs/repositories.md#channels-and-branches).
+
+### Changed
+
+- **The release limit keeps the newest release of every channel**, not only of stable and beta.
+- **`channel` of a release, an upload and a check is any channel of the track**, no longer only `stable` or `beta` (the OpenAPI description drops the enum). Existing values are unchanged.
+- **A token webhook for one channel ignores tags that belong to another channel** of the same repository, and says so in its answer.
 
 ## 0.7.0 (2026-11-15)
 

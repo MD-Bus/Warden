@@ -3,6 +3,7 @@ import { Link, useFetcher, useRevalidator } from "react-router"
 import { Archive, ArchiveRestore, Copy, FileUp, FlaskConical, Layers, Link2, MoreHorizontal, Paperclip, Pencil, Plus, Tag, Trash2, Upload, X } from "lucide-react"
 import { ConfirmAction } from "#/components/confirm-action"
 import { TrackSource, type ImportView, type SourceView } from "#/components/release-source"
+import { channelKeyFromName, channelName, DEFAULT_CHANNELS, MAX_CHANNEL_NAME, MAX_TRACK_CHANNELS, STABLE, type ChannelDef } from "#/lib/channels"
 import { FieldLabel, HelpTip } from "#/components/help-tip"
 import { StatusBadge } from "#/components/status-badge"
 import { StatusPicker } from "#/components/status-picker"
@@ -25,7 +26,7 @@ import { Input } from "#/components/ui/input"
 import { NativeSelect } from "#/components/ui/native-select"
 import { Textarea } from "#/components/ui/textarea"
 import { defaultReleaseStatuses, evaluateFileAccess, MAX_FILE_BYTES } from "#/lib/files"
-import { CHANNELS, isValidVersion, latestRelease, MAX_CHANGELOG_LENGTH, MAX_KEEP_RELEASES, releasesToPrune, sortForDisplay, type Channel } from "#/lib/releases"
+import { isValidVersion, latestRelease, MAX_CHANGELOG_LENGTH, MAX_KEEP_RELEASES, releasesToPrune, sortForDisplay, type Channel } from "#/lib/releases"
 import { DEFAULT_RELEASE_LABELS, keepKnownLabels, labelKeyFromName, MAX_LABEL_NAME, MAX_TRACK_LABELS, splitLabelKeys, type ReleaseLabel } from "#/lib/release-labels"
 import { describeStatusKeys, splitStatusKeys, type StatusSet } from "#/lib/statuses"
 import { statusConflicts, trackOverlaps } from "#/lib/tracks"
@@ -64,10 +65,11 @@ type LicenseState = { status: string; expires_at: number | null; domains: string
 export type SharedFiles = { appName: string; appHref: string; files: FileRow[]; statuses: StatusSet; tracks: TrackView[] }
 
 /** A release track as the pages send it: `statuses` are status keys. */
-export type TrackView = { id: string; name: string; statuses: string[]; check_domain: boolean; keep_releases: number | null; labels: ReleaseLabel[] }
+export type TrackView = { id: string; name: string; statuses: string[]; check_domain: boolean; keep_releases: number | null; labels: ReleaseLabel[]; channels: ChannelDef[] }
 
 /** A track of the page's owner, with the repository connected to it. */
-export type TrackPanel = { track: TrackView; source: SourceView | null; imports: ImportView[] }
+/** A track of the page's owner, with the repository each of its channels follows. */
+export type TrackPanel = { track: TrackView; channels: { channel: string; source: SourceView | null; imports: ImportView[] }[] }
 
 type ActionResult = { ok?: true; error?: string }
 
@@ -77,7 +79,10 @@ const DOMAIN_HELP = "When on, the download must include a domain (?domain=) the 
 const TRACK_HELP =
   "A track is what a set of licence statuses receives. Each status belongs to one track at most, so a licence is always offered the latest release of exactly one track: for example Updates for Active licences and a Final build for Completed ones. A track receives releases by upload, or from a connected repository."
 const VERSION_HELP = "A version makes the file a release: sites that send their version with their check are offered it as an update. Leave it empty for an attachment such as a manual or a notice."
-const CHANNEL_HELP = "Stable releases are offered to every site. Beta releases are offered only to sites that check with channel=beta."
+const CHANNEL_HELP =
+  "Stable releases are offered to every site. A release on another channel is offered only to sites that check with that channel (?channel=beta), and to channels that include it. The track defines its channels."
+const TRACK_CHANNELS_HELP =
+  "The channels sites can follow (?channel=). Stable is what a site receives when it asks for no channel, and cannot be removed. A channel can also receive other channels' releases: Beta includes Stable, so a beta site is offered the newest of both. Each channel can follow its own repository and branch. The key is fixed once saved."
 const CHANGELOG_HELP = "Public. Returned to sites with the release, so they can show what changed before updating."
 const LABELS_HELP =
   "Public. Sites receive the keys of a release's labels in labels, with the release, so their update code can act on them: for example install an urgent release at once instead of waiting for a staged rollout. The track defines which labels exist."
@@ -169,6 +174,7 @@ export function FilesSection({
   }
   // The labels of each track, own and inherited, to draw the labels of its releases.
   const labelsOf = new Map([...ownTracks, ...appTracks].map((t) => [t.id, t.labels]))
+  const channelsOf = new Map([...ownTracks, ...appTracks].map((t) => [t.id, t.channels]))
   const releaseLabels = (f: FileRow) => {
     const defined = (f.track_id && labelsOf.get(f.track_id)) || []
     return defined.filter((l) => splitLabelKeys(f.labels).includes(l.key))
@@ -202,9 +208,9 @@ export function FilesSection({
                   <Paperclip className="size-3.5 text-muted-foreground" />
                 )}
                 {isLatest && <Badge variant="success">Latest</Badge>}
-                {f.channel === "beta" && (
+                {kind === "releases" && f.channel !== STABLE && (
                   <Badge variant="info">
-                    <FlaskConical /> Beta
+                    <FlaskConical /> {channelName((f.track_id && channelsOf.get(f.track_id)) || DEFAULT_CHANNELS, f.channel)}
                   </Badge>
                 )}
                 {kind === "releases" && releaseLabels(f).map((l) => <StatusBadge key={l.key} status={{ label: l.name, color: l.color }} />)}
@@ -356,13 +362,17 @@ export function FilesSection({
         </div>
         {panel && (
           <div className="border-b bg-muted/20 px-4 py-3">
-            <TrackSource track={track} source={panel.source} imports={panel.imports} githubApp={githubApp} />
+            <div className="space-y-3">
+              {panel.channels.map((c) => (
+                <TrackSource key={c.channel} track={track} channel={{ key: c.channel, name: channelName(track.channels, c.channel) }} source={c.source} imports={c.imports} githubApp={githubApp} />
+              ))}
+            </div>
           </div>
         )}
         {list.length > 0 ? (
           table(list, "releases", latestIn(list), false)
         ) : (
-          <p className="px-4 py-3 text-sm text-muted-foreground">No release in this track yet.{panel ? (panel.source ? " Push a tag, or upload a build." : " Upload a build, or connect a repository.") : ""}</p>
+          <p className="px-4 py-3 text-sm text-muted-foreground">No release in this track yet.{panel ? (panel.channels.some((c) => c.source) ? " Push a tag, or upload a build." : " Upload a build, or connect a repository.") : ""}</p>
         )}
       </section>
     )
@@ -487,6 +497,7 @@ function ReleaseFields({
   setChannel,
   changelog,
   setChangelog,
+  channels,
   disabled,
 }: {
   version: string
@@ -495,6 +506,8 @@ function ReleaseFields({
   setChannel: (c: Channel) => void
   changelog: string
   setChangelog: (v: string) => void
+  /** The channels of the release's track. */
+  channels: ChannelDef[]
   disabled?: boolean
 }) {
   const invalid = version.trim() !== "" && !isValidVersion(version.trim())
@@ -517,9 +530,9 @@ function ReleaseFields({
             Channel
           </FieldLabel>
           <NativeSelect id="release-channel" value={channel} onChange={(e) => setChannel(e.target.value as Channel)} disabled={disabled || !version.trim()}>
-            {CHANNELS.map((c) => (
-              <option key={c} value={c}>
-                {c === "stable" ? "Stable" : "Beta"}
+            {channels.map((c) => (
+              <option key={c.key} value={c.key}>
+                {c.name}
               </option>
             ))}
           </NativeSelect>
@@ -586,6 +599,8 @@ function UploadDialog({
   // Without a track, the track created for the release has the default labels.
   const trackLabels = track?.labels ?? (tracks.length === 0 ? DEFAULT_RELEASE_LABELS : [])
   const chosenLabels = keepKnownLabels(labels, trackLabels)
+  const trackChannels = track?.channels ?? DEFAULT_CHANNELS
+  const chosenChannel = trackChannels.some((c) => c.key === channel) ? channel : STABLE
 
   const choose = (picked: File | undefined) => {
     if (!picked) return
@@ -606,7 +621,7 @@ function UploadDialog({
     // A release takes its availability from its track; an attachment has its own.
     const query = new URLSearchParams(
       isRelease
-        ? { name: file.name, version: version.trim(), channel, ...(track ? { track: track.id } : {}), ...(chosenLabels.length ? { labels: chosenLabels.join(",") } : {}) }
+        ? { name: file.name, version: version.trim(), channel: chosenChannel, ...(track ? { track: track.id } : {}), ...(chosenLabels.length ? { labels: chosenLabels.join(",") } : {}) }
         : { name: file.name, version: "", channel, statuses: statuses.join(","), check_domain: String(checkDomain) }
     )
     const xhr = new XMLHttpRequest()
@@ -674,7 +689,7 @@ function UploadDialog({
           </button>
           <input ref={input} type="file" className="sr-only" tabIndex={-1} aria-label="File" onChange={(e) => choose(e.target.files?.[0])} />
 
-          <ReleaseFields version={version} setVersion={setVersion} channel={channel} setChannel={setChannel} changelog={changelog} setChangelog={setChangelog} disabled={busy} />
+          <ReleaseFields version={version} setVersion={setVersion} channel={chosenChannel} setChannel={setChannel} changelog={changelog} setChangelog={setChangelog} channels={trackChannels} disabled={busy} />
 
           {isRelease ? (
             <>
@@ -749,6 +764,9 @@ function EditDialog({ file, onClose, statuses: statusSet, tracks }: { file: File
   // A release that moves keeps the labels its new track also defines.
   const trackLabels = tracks.find((t) => t.id === trackId)?.labels ?? []
   const chosenLabels = keepKnownLabels(labels, trackLabels)
+  // A release that moves to a track without its channel becomes stable.
+  const trackChannels = tracks.find((t) => t.id === trackId)?.channels ?? DEFAULT_CHANNELS
+  const chosenChannel = trackChannels.some((c) => c.key === channel) ? channel : STABLE
   return (
     <Dialog open={file !== null} onOpenChange={(next) => !busy && !next && onClose()}>
       <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-xl" onOpenAutoFocus={(e) => e.preventDefault()}>
@@ -757,7 +775,7 @@ function EditDialog({ file, onClose, statuses: statusSet, tracks }: { file: File
           <DialogDescription>Change the version and notes of this file, and its track (a release) or when it can be downloaded (an attachment).</DialogDescription>
         </DialogHeader>
         <div className="space-y-4">
-          <ReleaseFields version={version} setVersion={setVersion} channel={channel} setChannel={setChannel} changelog={changelog} setChangelog={setChangelog} />
+          <ReleaseFields version={version} setVersion={setVersion} channel={chosenChannel} setChannel={setChannel} changelog={changelog} setChangelog={setChangelog} channels={trackChannels} />
           {version.trim() ? (
             <>
               <TrackPicker tracks={tracks} value={trackId} onChange={setTrackId} statuses={statusSet} />
@@ -795,7 +813,7 @@ function EditDialog({ file, onClose, statuses: statusSet, tracks }: { file: File
               setSubmitted(true)
               update.submit(
                 version.trim()
-                  ? { intent: "update-file", fileId: file.id, version: version.trim(), channel, changelog, notes, labels: chosenLabels.join(","), ...(trackId ? { track: trackId } : {}) }
+                  ? { intent: "update-file", fileId: file.id, version: version.trim(), channel: chosenChannel, changelog, notes, labels: chosenLabels.join(","), ...(trackId ? { track: trackId } : {}) }
                   : { intent: "update-file", fileId: file.id, version: "", channel, changelog: file.changelog, notes, statuses: statuses.join(","), check_domain: String(checkDomain) },
                 { method: "post" }
               )
@@ -849,6 +867,7 @@ function TrackDialog({ track, onClose, statuses: statusSet, tracks, stored }: { 
   const [checkDomain, setCheckDomain] = useState(true)
   const [limit, setLimit] = useState("")
   const [labels, setLabels] = useState<LabelDraft[]>([])
+  const [channels, setChannels] = useState<ChannelDraft[]>([])
   const [submitted, setSubmitted] = useState(false)
   const editing = track !== null && track !== "new" ? track : null
 
@@ -859,6 +878,7 @@ function TrackDialog({ track, onClose, statuses: statusSet, tracks, stored }: { 
     setCheckDomain(editing?.check_domain ?? true)
     setLimit(editing?.keep_releases ? String(editing.keep_releases) : "")
     setLabels((editing?.labels ?? DEFAULT_RELEASE_LABELS).map((l) => ({ ...l, saved: Boolean(editing) })))
+    setChannels((editing?.channels ?? DEFAULT_CHANNELS).map((c) => ({ ...c, saved: true })))
     setSubmitted(false)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [track])
@@ -872,7 +892,7 @@ function TrackDialog({ track, onClose, statuses: statusSet, tracks, stored }: { 
   const limitNumber = limit.trim() === "" ? null : Number(limit)
   const limitValid = limitNumber === null || (Number.isInteger(limitNumber) && limitNumber >= 1 && limitNumber <= MAX_KEEP_RELEASES)
   const doomed = editing && limitNumber !== null && limitValid ? releasesToPrune(stored[editing.id] ?? [], limitNumber) : []
-  const labelError = labelDraftError(labels)
+  const labelError = labelDraftError(labels) ?? channelDraftError(channels)
   // Releases of this track that lose a label when it is removed here.
   const unlabelled = editing ? (stored[editing.id] ?? []).filter((f) => splitLabelKeys(f.labels).some((k) => !labels.some((l) => l.key === k))).length : 0
   return (
@@ -916,7 +936,7 @@ function TrackDialog({ track, onClose, statuses: statusSet, tracks, stored }: { 
             <HelpTip>{DOMAIN_HELP}</HelpTip>
           </label>
           <div className="space-y-1.5">
-            <FieldLabel htmlFor="track-keep" help="The number of releases this track keeps. When a release is added, or this number is lowered, the oldest releases beyond it are deleted with their files. The newest stable release and the newest beta release are never deleted. Leave empty to keep every release.">
+            <FieldLabel htmlFor="track-keep" help="The number of releases this track keeps. When a release is added, or this number is lowered, the oldest releases beyond it are deleted with their files. The newest release of every channel is never deleted. Leave empty to keep every release.">
               Keep the newest releases
             </FieldLabel>
             <Input id="track-keep" type="number" inputMode="numeric" min={1} max={MAX_KEEP_RELEASES} value={limit} onChange={(e) => setLimit(e.target.value)} placeholder="All releases" disabled={busy} className="w-40" />
@@ -928,6 +948,7 @@ function TrackDialog({ track, onClose, statuses: statusSet, tracks, stored }: { 
               </p>
             )}
           </div>
+          <ChannelsEditor channels={channels} onChange={setChannels} disabled={busy} />
           <LabelsEditor labels={labels} onChange={setLabels} disabled={busy} />
           {labelError && <p className="text-xs text-destructive">{labelError}</p>}
           {unlabelled > 0 && (
@@ -947,7 +968,9 @@ function TrackDialog({ track, onClose, statuses: statusSet, tracks, stored }: { 
             onClick={() => {
               setSubmitted(true)
               save.submit(
-                { intent: editing ? "update-track" : "create-track", ...(editing ? { trackId: editing.id } : {}), name: name.trim(), statuses: selected.join(","), check_domain: String(checkDomain), keep_releases: limit.trim(), labels: JSON.stringify(labels.map(({ key, name, color }) => ({ key, name: name.trim(), color }))) },
+                { intent: editing ? "update-track" : "create-track", ...(editing ? { trackId: editing.id } : {}), name: name.trim(), statuses: selected.join(","), check_domain: String(checkDomain), keep_releases: limit.trim(), labels: JSON.stringify(labels.map(({ key, name, color }) => ({ key, name: name.trim(), color }))),
+                  channels: JSON.stringify(channels.map(({ key, name, includes }) => ({ key, name: name.trim(), includes: includes.filter((k) => channels.some((c) => c.key === k)) }))),
+                },
                 { method: "post" }
               )
             }}
@@ -1121,6 +1144,92 @@ function LabelsEditor({ labels, onChange, disabled }: { labels: LabelDraft[]; on
           onClick={() => onChange([...labels, { key: "", name: "", color: LABEL_COLORS[labels.length % LABEL_COLORS.length], saved: false }])}
         >
           <Plus /> Add label
+        </Button>
+      )}
+    </div>
+  )
+}
+
+/** A channel being edited in the track dialog. `saved`: it exists on the track, so its key no longer changes. */
+type ChannelDraft = ChannelDef & { saved: boolean }
+
+/** What prevents saving the channels, or null. The server checks the same rules, and that removed channels are unused. */
+function channelDraftError(channels: ChannelDraft[]): string | null {
+  if (channels.some((c) => !c.name.trim())) return "Each channel needs a name."
+  if (channels.some((c) => !c.key)) return "Each channel name needs at least one letter."
+  const keys = channels.map((c) => c.key)
+  const duplicate = keys.find((k, i) => keys.indexOf(k) !== i)
+  if (duplicate) return `Two channels have the key ${duplicate}: rename one of them.`
+  return null
+}
+
+/** Edits the channels of a track: name, the key derived from it until saved, and the channels each one includes. */
+function ChannelsEditor({ channels, onChange, disabled }: { channels: ChannelDraft[]; onChange: (channels: ChannelDraft[]) => void; disabled?: boolean }) {
+  const change = (index: number, patch: Partial<ChannelDraft>) => onChange(channels.map((c, i) => (i === index ? { ...c, ...patch } : c)))
+  return (
+    <div className="space-y-2">
+      <FieldLabel help={TRACK_CHANNELS_HELP}>Channels</FieldLabel>
+      <ul className="space-y-2">
+        {channels.map((c, i) => {
+          const stable = c.key === STABLE && c.saved
+          const others = channels.filter((o, j) => j !== i && o.key)
+          return (
+            <li key={i} className="space-y-1.5 rounded-md border p-2">
+              <div className="flex items-center gap-2">
+                <Input
+                  aria-label="Channel name"
+                  value={c.name}
+                  maxLength={MAX_CHANNEL_NAME}
+                  disabled={disabled}
+                  placeholder="Name"
+                  autoFocus={!c.saved && !c.name && i === channels.length - 1}
+                  onChange={(e) => change(i, c.saved ? { name: e.target.value } : { name: e.target.value, key: channelKeyFromName(e.target.value) })}
+                  className="h-8 min-w-0 flex-1"
+                />
+                <code className="w-24 shrink-0 truncate text-xs text-muted-foreground" title="Sites send this key (?channel=). Fixed once saved.">
+                  {c.key || "no key"}
+                </code>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="size-8 shrink-0"
+                  aria-label={`Remove ${c.name || "channel"}`}
+                  disabled={disabled || stable}
+                  title={stable ? "Stable cannot be removed: sites that ask for no channel receive it." : undefined}
+                  onClick={() => onChange(channels.filter((_, j) => j !== i).map((o) => ({ ...o, includes: o.includes.filter((k) => k !== c.key) })))}
+                >
+                  <X className="size-4" />
+                </Button>
+              </div>
+              {stable ? (
+                <p className="text-xs text-muted-foreground">Sites that ask for no channel, or for one this track does not have, receive Stable.</p>
+              ) : (
+                others.length > 0 && (
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                    Also receives
+                    {others.map((o) => (
+                      <label key={o.key} className="flex items-center gap-1.5 text-foreground">
+                        <input
+                          type="checkbox"
+                          className="size-3.5 accent-primary"
+                          checked={c.includes.includes(o.key)}
+                          disabled={disabled}
+                          onChange={(e) => change(i, { includes: e.target.checked ? [...c.includes, o.key] : c.includes.filter((k) => k !== o.key) })}
+                        />
+                        {o.name || o.key}
+                      </label>
+                    ))}
+                  </div>
+                )
+              )}
+            </li>
+          )
+        })}
+      </ul>
+      {channels.length < MAX_TRACK_CHANNELS && (
+        <Button type="button" variant="outline" size="sm" disabled={disabled} onClick={() => onChange([...channels, { key: "", name: "", includes: [STABLE], saved: false }])}>
+          <Plus /> Add channel
         </Button>
       )}
     </div>

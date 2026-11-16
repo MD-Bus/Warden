@@ -1,5 +1,6 @@
 import { cleanFileName, defaultReleaseStatuses, MAX_FILE_BYTES } from "../lib/files"
-import { CHANNELS, compareVersions, isChannel, isValidVersion, MAX_CHANGELOG_LENGTH, MAX_VERSION_LENGTH, type Channel } from "../lib/releases"
+import { compareVersions, isValidVersion, MAX_CHANGELOG_LENGTH, MAX_VERSION_LENGTH, type Channel } from "../lib/releases"
+import { DEFAULT_CHANNELS, readTrackChannels, STABLE, type ChannelDef } from "../lib/channels"
 import { keepKnownLabels, parseReleaseLabels, readTrackLabels, splitLabelKeys } from "../lib/release-labels"
 import { describeStatusKeys, parseStatusKeys, splitStatusKeys, type StatusSet } from "../lib/statuses"
 import type { App } from "./apps.server"
@@ -153,9 +154,10 @@ const duplicateVersion = (version: string, trackName: string, existing: { name: 
   status: 409,
 })
 
-function readChannel(raw: string | undefined): { channel: Channel } | { error: string } {
-  const channel = (raw ?? "").trim().toLowerCase() || "stable"
-  return isChannel(channel) ? { channel } : { error: `channel must be one of: ${CHANNELS.join(", ")}.` }
+/** Validates a release's channel against the channels of its track. Empty means stable. */
+function readChannel(raw: string | undefined, channels: ChannelDef[]): { channel: Channel } | { error: string } {
+  const channel = (raw ?? "").trim().toLowerCase() || STABLE
+  return channels.some((c) => c.key === channel) ? { channel } : { error: `channel must be a channel of the release's track: ${channels.map((c) => c.key).join(", ")}.` }
 }
 
 /**
@@ -186,18 +188,19 @@ export async function storeFile(env: Env, owner: FileOwner, input: StoreInput): 
   if (!input.body && !input.stored) return { error: "The request has no body.", status: 422 }
   const version = readVersion(input.version)
   if ("error" in version) return { error: version.error, status: 422 }
-  const channel = readChannel(input.channel)
-  if ("error" in channel) return { error: channel.error, status: 422 }
 
   // A release takes its availability from its track; an attachment has its own.
   let statuses: string[] | null
   let checkDomain = input.checkDomain === false ? 0 : 1
   let trackId: string | null = null
   let labels: string[] = []
+  let channel: { channel: Channel } | { error: string } = readChannel(input.channel, DEFAULT_CHANNELS)
   if (version.version) {
     const resolved = await resolveTrackForRelease(env, owner, input.track ?? null, input.statuses, input.checkDomain !== false)
     if ("error" in resolved) return resolved
     trackId = resolved.track.id
+    channel = readChannel(input.channel, readTrackChannels(resolved.track.channels))
+    if ("error" in channel) return { error: channel.error, status: 422 }
     if (input.labels !== undefined && input.labels !== null) {
       const parsed = parseReleaseLabels(input.labels, readTrackLabels(resolved.track.labels))
       if ("error" in parsed) return { error: parsed.error, status: 422 }
@@ -212,12 +215,13 @@ export async function storeFile(env: Env, owner: FileOwner, input: StoreInput): 
     if (!statuses) return { error: `statuses must be a comma separated list of licence statuses: ${set.map((s) => s.key).join(", ")}.`, status: 422 }
   }
 
+  if ("error" in channel) return { error: channel.error, status: 422 }
   const id = input.stored?.id ?? newId("fil")
   const key = input.stored?.key ?? fileKey(owner, id)
   const contentType = (input.contentType || "application/octet-stream").slice(0, 120)
   const sha256 = input.stored?.sha256 ?? (await putAndHash(env, key, input.body!, input.size, contentType))
   const now = Date.now()
-  const label = version.version ? `${name} (version ${version.version}${channel.channel === "beta" ? ", beta" : ""})` : name
+  const label = version.version ? `${name} (version ${version.version}${channel.channel !== STABLE ? `, ${channel.channel}` : ""})` : name
   try {
     const statements = [
       env.DB.prepare(
@@ -272,8 +276,7 @@ export async function updateFile(env: Env, owner: FileOwner, file: LicenseFile, 
   const set = await statusSetForOwner(env, owner)
   const version = changes.version === undefined ? { version: file.version } : readVersion(changes.version)
   if ("error" in version) return { error: version.error, status: 422 }
-  const channel = changes.channel === undefined ? { channel: file.channel } : readChannel(changes.channel)
-  if ("error" in channel) return { error: channel.error, status: 422 }
+  let channel: { channel: Channel } | { error: string } = changes.channel === undefined ? { channel: file.channel } : readChannel(changes.channel, DEFAULT_CHANNELS)
 
   let statuses = file.statuses
   let checkDomain = file.check_domain
@@ -295,6 +298,9 @@ export async function updateFile(env: Env, owner: FileOwner, file: LicenseFile, 
     trackName = track.name
     statuses = track.statuses
     checkDomain = track.check_domain
+    // The channel must be one of the track's; a release that moves to a track without its channel becomes stable.
+    const trackChannels = readTrackChannels(track.channels)
+    channel = changes.channel !== undefined ? readChannel(changes.channel, trackChannels) : { channel: trackChannels.some((c) => c.key === file.channel) ? file.channel : STABLE }
     // Labels are the track's: given ones are checked against it; a release that moves keeps those its new track has.
     const defined = readTrackLabels(track.labels)
     if (changes.labels !== undefined) {
@@ -312,6 +318,7 @@ export async function updateFile(env: Env, owner: FileOwner, file: LicenseFile, 
     if (changes.checkDomain !== undefined) checkDomain = changes.checkDomain ? 1 : 0
   }
 
+  if ("error" in channel) return { error: channel.error, status: 422 }
   const withdrawnAt = changes.withdrawn === undefined ? file.withdrawn_at : changes.withdrawn ? (file.withdrawn_at ?? Date.now()) : null
   // A release that gets a new version, moves to another track or is restored must not repeat a version of its track.
   if (version.version && trackId && withdrawnAt === null && (version.version !== file.version || trackId !== file.track_id || file.withdrawn_at !== null)) {

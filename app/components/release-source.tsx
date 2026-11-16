@@ -25,6 +25,9 @@ export type SourceView = {
   /** The track this repository publishes into, and the prefix its tags start with. */
   track_id: string | null
   tag_prefix: string
+  /** The channel of the track it publishes into, and the branch whose tags it takes ("" for any branch). */
+  channel: string
+  branch: string
   status_keys: string[]
   check_domain: boolean
   has_token: boolean
@@ -57,15 +60,21 @@ const STATE_BADGE: Record<ImportState, "success" | "secondary" | "warning" | "de
 const PREFIX_HELP =
   "Tags of this track start with this text. Leave it empty for tags like v1.4.0. To publish two tracks from one repository, give one a prefix: final- takes final-v1.4.0, while v1.4.0 goes to the track without prefix."
 
+const BRANCH_HELP =
+  "Only tags made on this branch publish into this channel, for example main for Stable and beta for Beta. Two channels can follow the same repository this way. Leave it empty to take tags made on any branch; a Stable channel without a branch also sends tags with a suffix, such as v2.0.0-beta.1, to Beta."
+
 const FOLDER_HELP =
   "The top-level folder inside the published zip. Archives from GitHub are wrapped in a folder named after the commit; Warden renames it to this name, so every release installs into the same folder. For a WordPress theme or plugin, use its slug."
 
+/** A channel of a track, as TrackSource needs it. */
+export type SourceChannel = { key: string; name: string }
+
 /**
- * The repository connected to a release track: its tags are downloaded, repacked and published into the track.
- * Posts its intents, with the track's id, to the current route (save-source, delete-source, regenerate-source-secret,
- * import-tag, retry-import).
+ * The repository a channel of a release track follows: its tags are downloaded, repacked and published into the track,
+ * on that channel. Posts its intents, with the track's id and the channel, to the current route (save-source,
+ * delete-source, regenerate-source-secret, import-tag, retry-import).
  */
-export function TrackSource({ track, source, imports, githubApp }: { track: { id: string; name: string }; source: SourceView | null; imports: ImportView[]; githubApp: boolean }) {
+export function TrackSource({ track, channel, source, imports, githubApp }: { track: { id: string; name: string }; channel: SourceChannel; source: SourceView | null; imports: ImportView[]; githubApp: boolean }) {
   const [editing, setEditing] = useState(false)
   const [setup, setSetup] = useState(false)
   const [publishing, setPublishing] = useState(false)
@@ -95,19 +104,19 @@ export function TrackSource({ track, source, imports, githubApp }: { track: { id
     return (
       <div className="flex flex-wrap items-center justify-between gap-2 text-sm text-muted-foreground">
         <span className="flex items-center gap-2">
-          <GitBranch className="size-4" /> No repository: releases are uploaded by hand.
+          <GitBranch className="size-4" /> <span className="font-medium text-foreground">{channel.name}</span> No repository: releases are uploaded by hand.
         </span>
         <Button variant="outline" size="sm" onClick={() => setEditing(true)}>
           <GitBranch /> Connect repository
         </Button>
-        <SourceDialog open={editing} onOpenChange={setEditing} trackId={track.id} source={null} githubApp={githubApp} />
+        <SourceDialog open={editing} onOpenChange={setEditing} trackId={track.id} channel={channel} source={null} githubApp={githubApp} />
       </div>
     )
   }
 
   const provider = PROVIDER_INFO[source.provider]
   const repoUrl = `https://${provider.host}/${source.repository}`
-  const toggle = () => action.submit({ intent: "save-source", trackId: track.id, enabled: String(!source.enabled) }, { method: "post" })
+  const toggle = () => action.submit({ intent: "save-source", trackId: track.id, channel: channel.key, enabled: String(!source.enabled) }, { method: "post" })
   const example = `${source.tag_prefix}v1.4.0`
 
   return (
@@ -116,12 +125,16 @@ export function TrackSource({ track, source, imports, githubApp }: { track: { id
         <div className="min-w-0 space-y-0.5">
           <div className="flex flex-wrap items-center gap-2 text-sm">
             <GitBranch className="size-4 text-muted-foreground" />
+            <span className="font-medium">{channel.name}</span>
             <a href={repoUrl} target="_blank" rel="noreferrer" className="font-mono font-medium break-all underline-offset-2 hover:underline">
               {source.repository}
             </a>
             <Badge variant="outline">{source.connection === "app" ? `${provider.label} App` : provider.label}</Badge>
             {!source.enabled && <Badge variant="warning">Paused</Badge>}
             {source.has_token && <Badge variant="secondary">Access token saved</Badge>}
+            <Badge variant="secondary" className="font-mono">
+              {source.branch ? `branch ${source.branch}` : "any branch"}
+            </Badge>
           </div>
           <p className="text-xs text-muted-foreground">
             Tags like <span className="font-mono text-foreground">{example}</span> publish <span className="font-mono text-foreground">{packageFileName(source.package_folder, "1.4.0")}</span>
@@ -143,7 +156,7 @@ export function TrackSource({ track, source, imports, githubApp }: { track: { id
           </Button>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="outline" size="icon" className="size-8" aria-label={`Repository actions for ${track.name}`}>
+              <Button variant="outline" size="icon" className="size-8" aria-label={`Repository actions for ${track.name}, ${channel.name}`}>
                 <MoreHorizontal />
               </Button>
             </DropdownMenuTrigger>
@@ -189,7 +202,7 @@ export function TrackSource({ track, source, imports, githubApp }: { track: { id
               <div className="flex items-center gap-2 text-xs whitespace-nowrap text-muted-foreground sm:justify-end">
                 <Ago ts={row.finished_at ?? row.started_at} />
                 {(row.state === "failed" || row.state === "skipped") && (
-                  <Button variant="ghost" size="sm" className="h-7" disabled={action.state !== "idle"} onClick={() => action.submit({ intent: "retry-import", trackId: track.id, importId: row.id }, { method: "post" })}>
+                  <Button variant="ghost" size="sm" className="h-7" disabled={action.state !== "idle"} onClick={() => action.submit({ intent: "retry-import", trackId: track.id, channel: channel.key, importId: row.id }, { method: "post" })}>
                     <RefreshCw /> Retry
                   </Button>
                 )}
@@ -199,19 +212,19 @@ export function TrackSource({ track, source, imports, githubApp }: { track: { id
         </ul>
       )}
 
-      <SourceDialog open={editing} onOpenChange={setEditing} trackId={track.id} source={source} githubApp={githubApp} />
-      <WebhookDialog open={setup} onOpenChange={setSetup} trackId={track.id} source={source} />
-      <PublishTagDialog open={publishing} onOpenChange={setPublishing} trackId={track.id} prefix={source.tag_prefix} />
+      <SourceDialog open={editing} onOpenChange={setEditing} trackId={track.id} channel={channel} source={source} githubApp={githubApp} />
+      <WebhookDialog open={setup} onOpenChange={setSetup} trackId={track.id} channel={channel.key} source={source} />
+      <PublishTagDialog open={publishing} onOpenChange={setPublishing} trackId={track.id} channel={channel.key} prefix={source.tag_prefix} />
       <ConfirmAction
         intent="delete-source"
-        fields={{ trackId: track.id }}
+        fields={{ trackId: track.id, channel: channel.key }}
         open={disconnecting}
         onOpenChange={setDisconnecting}
-        title={`Disconnect ${source.repository} from "${track.name}"?`}
+        title={`Disconnect ${source.repository} from "${track.name}", ${channel.name}?`}
         description={
           source.connection === "app"
-            ? "New tags are no longer published into this track. Releases already published stay available."
-            : "New tags are no longer published into this track. Releases already published stay available. Remove the webhook in GitHub as well."
+            ? `New tags are no longer published on ${channel.name}. Releases already published stay available.`
+            : `New tags are no longer published on ${channel.name}. Releases already published stay available. Remove the webhook in GitHub as well.`
         }
         confirm="Disconnect"
       />
@@ -219,7 +232,21 @@ export function TrackSource({ track, source, imports, githubApp }: { track: { id
   )
 }
 
-function SourceDialog({ open, onOpenChange, trackId, source, githubApp }: { open: boolean; onOpenChange: (open: boolean) => void; trackId: string; source: SourceView | null; githubApp: boolean }) {
+function SourceDialog({
+  open,
+  onOpenChange,
+  trackId,
+  channel,
+  source,
+  githubApp,
+}: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  trackId: string
+  channel: SourceChannel
+  source: SourceView | null
+  githubApp: boolean
+}) {
   const save = useFetcher<ActionResult>()
   const repos = useFetcher<{ repositories?: AppRepository[]; error?: string }>()
   const [connection, setConnection] = useState<"app" | "token">("token")
@@ -232,6 +259,7 @@ function SourceDialog({ open, onOpenChange, trackId, source, githubApp }: { open
   const [folder, setFolder] = useState("")
   const [folderTouched, setFolderTouched] = useState(false)
   const [tagPrefix, setTagPrefix] = useState("")
+  const [branch, setBranch] = useState("")
   const [submitted, setSubmitted] = useState(false)
 
   useEffect(() => {
@@ -246,6 +274,7 @@ function SourceDialog({ open, onOpenChange, trackId, source, githubApp }: { open
     setFolder(source?.package_folder ?? "")
     setFolderTouched(Boolean(source))
     setTagPrefix(source?.tag_prefix ?? "")
+    setBranch(source?.branch ?? (channel.key === "stable" ? "" : channel.key))
     setSubmitted(false)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
@@ -282,9 +311,10 @@ function SourceDialog({ open, onOpenChange, trackId, source, githubApp }: { open
     <Dialog open={open} onOpenChange={(next) => !busy && onOpenChange(next)}>
       <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-xl" onOpenAutoFocus={(e) => e.preventDefault()}>
         <DialogHeader>
-          <DialogTitle>{source ? "Repository settings" : "Connect a repository"}</DialogTitle>
+          <DialogTitle>{source ? `Repository settings, ${channel.name}` : `Connect a repository to ${channel.name}`}</DialogTitle>
           <DialogDescription>
-            Warden downloads the repository as a zip when a tag is pushed and publishes it as a release of this track. Nothing is built: the repository is published as it is.
+            Warden downloads the repository as a zip when a tag is pushed and publishes it as a release of this track, on the {channel.name} channel. Nothing is built: the repository is published as it
+            is.
             {!githubApp && (
               <>
                 {" "}
@@ -390,6 +420,12 @@ function SourceDialog({ open, onOpenChange, trackId, source, githubApp }: { open
               )}
             </div>
           )}
+          <div className="space-y-1.5">
+            <FieldLabel htmlFor="source-branch" help={BRANCH_HELP}>
+              Branch
+            </FieldLabel>
+            <Input id="source-branch" value={branch} onChange={(e) => setBranch(e.target.value)} placeholder="Any branch" className="font-mono" disabled={busy} />
+          </div>
           <div className="grid gap-4 sm:grid-cols-3">
             <div className="space-y-1.5">
               <FieldLabel htmlFor="source-trigger" help={TRIGGER_INFO[trigger].help}>
@@ -433,7 +469,14 @@ function SourceDialog({ open, onOpenChange, trackId, source, githubApp }: { open
             shownFolder && (
               <p className="-mt-2 text-xs text-muted-foreground">
                 Tag <span className="font-mono">{tagPrefix.trim()}v1.4.0</span> publishes <span className="font-mono">{packageFileName(shownFolder, "1.4.0")}</span>, containing{" "}
-                <span className="font-mono">{shownFolder}/</span>, into this track.
+                <span className="font-mono">{shownFolder}/</span>, on {channel.name}
+                {branch.trim() ? (
+                  <>
+                    {" "}
+                    when the tag is made on <span className="font-mono">{branch.trim()}</span>
+                  </>
+                ) : null}
+                .
               </p>
             )
           )}
@@ -451,6 +494,8 @@ function SourceDialog({ open, onOpenChange, trackId, source, githubApp }: { open
                 {
                   intent: "save-source",
                   trackId,
+                  channel: channel.key,
+                  branch: branch.trim(),
                   connection,
                   provider,
                   repository: repository.trim(),
@@ -500,7 +545,7 @@ function CopyField({ label, value, secret = false, help }: { label: string; valu
   )
 }
 
-function WebhookDialog({ open, onOpenChange, trackId, source }: { open: boolean; onOpenChange: (open: boolean) => void; trackId: string; source: SourceView }) {
+function WebhookDialog({ open, onOpenChange, trackId, channel, source }: { open: boolean; onOpenChange: (open: boolean) => void; trackId: string; channel: string; source: SourceView }) {
   const regenerate = useFetcher<ActionResult>()
   const settingsUrl = `https://${PROVIDER_INFO[source.provider].host}/${source.repository}/settings/hooks/new`
   return (
@@ -538,7 +583,7 @@ function WebhookDialog({ open, onOpenChange, trackId, source }: { open: boolean;
           <Button
             variant="ghost"
             disabled={regenerate.state !== "idle"}
-            onClick={() => regenerate.submit({ intent: "regenerate-source-secret", trackId }, { method: "post" })}
+            onClick={() => regenerate.submit({ intent: "regenerate-source-secret", trackId, channel }, { method: "post" })}
             title="Replaces the secret. Update it in GitHub afterwards."
           >
             <RefreshCw /> {regenerate.state !== "idle" ? "Generating…" : "Generate a new secret"}
@@ -550,7 +595,7 @@ function WebhookDialog({ open, onOpenChange, trackId, source }: { open: boolean;
   )
 }
 
-function PublishTagDialog({ open, onOpenChange, trackId, prefix }: { open: boolean; onOpenChange: (open: boolean) => void; trackId: string; prefix: string }) {
+function PublishTagDialog({ open, onOpenChange, trackId, channel, prefix }: { open: boolean; onOpenChange: (open: boolean) => void; trackId: string; channel: string; prefix: string }) {
   const publish = useFetcher<ActionResult>()
   const [tag, setTag] = useState("")
   const [submitted, setSubmitted] = useState(false)
@@ -576,7 +621,7 @@ function PublishTagDialog({ open, onOpenChange, trackId, prefix }: { open: boole
             e.preventDefault()
             if (!tag.trim()) return
             setSubmitted(true)
-            publish.submit({ intent: "import-tag", trackId, tag: tag.trim() }, { method: "post" })
+            publish.submit({ intent: "import-tag", trackId, channel, tag: tag.trim() }, { method: "post" })
           }}
         >
           <FieldLabel htmlFor="publish-tag">Tag</FieldLabel>

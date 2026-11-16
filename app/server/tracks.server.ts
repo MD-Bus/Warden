@@ -1,4 +1,5 @@
 import { defaultReleaseStatuses } from "../lib/files"
+import { DEFAULT_CHANNELS, parseChannelDefinitions, readTrackChannels, STABLE, type ChannelDef } from "../lib/channels"
 import { DEFAULT_RELEASE_LABELS, keepKnownLabels, parseLabelDefinitions, readTrackLabels, splitLabelKeys, type ReleaseLabel } from "../lib/release-labels"
 import { readKeepReleases, releasesToPrune } from "../lib/releases"
 import { describeStatusKeys, parseStatusKeys, type StatusSet } from "../lib/statuses"
@@ -23,6 +24,8 @@ export type ReleaseTrack = {
   keep_releases: number | null
   /** The labels its releases can carry, as JSON; null (a track from before labels) means the default labels. Read with readTrackLabels. */
   labels: string | null
+  /** Its channels, as JSON; null (a track from before channels) means stable and beta. Read with readTrackChannels. */
+  channels: string | null
   position: number
   created_at: number
   updated_at: number
@@ -53,7 +56,7 @@ export async function findTrack(env: Env, owner: TrackOwner, ref: string): Promi
   return tracks.find((t) => t.id === ref) ?? tracks.find((t) => t.name.toLowerCase() === ref.trim().toLowerCase()) ?? null
 }
 
-export type TrackInput = { name?: unknown; statuses?: unknown; check_domain?: unknown; position?: unknown; keep_releases?: unknown; labels?: unknown }
+export type TrackInput = { name?: unknown; statuses?: unknown; check_domain?: unknown; position?: unknown; keep_releases?: unknown; labels?: unknown; channels?: unknown }
 
 function overlapError(overlaps: { status: string; track: ReleaseTrack }[], set: StatusSet): string {
   const first = overlaps[0]
@@ -62,7 +65,7 @@ function overlapError(overlaps: { status: string; track: ReleaseTrack }[], set: 
 }
 
 /** Reads and validates the fields of a track. `current` supplies the values the input leaves out. */
-async function readTrack(env: Env, owner: TrackOwner, input: TrackInput, current: ReleaseTrack | null): Promise<{ name: string; statuses: string[]; checkDomain: number; position: number; keep: number | null; labels: ReleaseLabel[] } | Failure> {
+async function readTrack(env: Env, owner: TrackOwner, input: TrackInput, current: ReleaseTrack | null): Promise<{ name: string; statuses: string[]; checkDomain: number; position: number; keep: number | null; labels: ReleaseLabel[]; channels: ChannelDef[] } | Failure> {
   const set = await statusSetOf(env, owner)
   const rawName = input.name === undefined ? (current?.name ?? "") : input.name
   if (typeof rawName !== "string") return { error: "name must be a string.", status: 422 }
@@ -92,7 +95,25 @@ async function readTrack(env: Env, owner: TrackOwner, input: TrackInput, current
     // A label's key is what sites read: an existing label keeps its key when it is renamed.
     labels = parsed.labels
   }
-  return { name: rawName.trim().slice(0, MAX_TRACK_NAME), statuses, checkDomain, position, keep: keep.keep, labels }
+  let channels = current ? readTrackChannels(current.channels) : DEFAULT_CHANNELS
+  if (input.channels !== undefined) {
+    const parsed = parseChannelDefinitions(input.channels)
+    if ("error" in parsed) return { error: parsed.error, status: 422 }
+    // A channel that still has releases or a repository cannot be removed: move or delete them first.
+    if (current) {
+      const removed = channels.filter((c) => !parsed.channels.some((n) => n.key === c.key)).map((c) => c.key)
+      for (const key of removed) {
+        const used = await env.DB.prepare("SELECT (SELECT COUNT(*) FROM files WHERE track_id = ? AND channel = ?) AS releases, (SELECT COUNT(*) FROM release_sources WHERE track_id = ? AND channel = ?) AS sources")
+          .bind(current.id, key, current.id, key)
+          .first<{ releases: number; sources: number }>()
+        const name = channels.find((c) => c.key === key)?.name ?? key
+        if (used?.sources) return { error: `The channel ${name} follows a repository. Disconnect it before removing the channel.`, status: 409 }
+        if (used?.releases) return { error: `The channel ${name} has ${used.releases} release${used.releases === 1 ? "" : "s"}. Move ${used.releases === 1 ? "it" : "them"} to another channel, or delete ${used.releases === 1 ? "it" : "them"}, before removing the channel.`, status: 409 }
+      }
+    }
+    channels = parsed.channels
+  }
+  return { name: rawName.trim().slice(0, MAX_TRACK_NAME), statuses, checkDomain, position, keep: keep.keep, labels, channels }
 }
 
 export async function createTrack(env: Env, owner: TrackOwner, input: TrackInput, now = Date.now()): Promise<{ track: ReleaseTrack } | Failure> {
@@ -100,9 +121,9 @@ export async function createTrack(env: Env, owner: TrackOwner, input: TrackInput
   if ("error" in read) return read
   const id = newId("trk")
   await env.DB.prepare(
-    "INSERT INTO release_tracks (id, app_id, license_id, name, statuses, check_domain, position, keep_releases, labels, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    "INSERT INTO release_tracks (id, app_id, license_id, name, statuses, check_domain, position, keep_releases, labels, channels, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
   )
-    .bind(id, "app" in owner ? owner.app.id : null, "license" in owner ? owner.license.id : null, read.name, read.statuses.join(","), read.checkDomain, read.position, read.keep, JSON.stringify(read.labels), now, now)
+    .bind(id, "app" in owner ? owner.app.id : null, "license" in owner ? owner.license.id : null, read.name, read.statuses.join(","), read.checkDomain, read.position, read.keep, JSON.stringify(read.labels), JSON.stringify(read.channels), now, now)
     .run()
   return { track: (await getTrack(env, owner, id))! }
 }
@@ -116,7 +137,7 @@ export async function updateTrack(env: Env, owner: TrackOwner, track: ReleaseTra
   if ("error" in read) return read
   const statuses = read.statuses.join(",")
   const statements = [
-    env.DB.prepare("UPDATE release_tracks SET name = ?, statuses = ?, check_domain = ?, position = ?, keep_releases = ?, labels = ?, updated_at = ? WHERE id = ?").bind(read.name, statuses, read.checkDomain, read.position, read.keep, JSON.stringify(read.labels), now, track.id),
+    env.DB.prepare("UPDATE release_tracks SET name = ?, statuses = ?, check_domain = ?, position = ?, keep_releases = ?, labels = ?, channels = ?, updated_at = ? WHERE id = ?").bind(read.name, statuses, read.checkDomain, read.position, read.keep, JSON.stringify(read.labels), JSON.stringify(read.channels), now, track.id),
     env.DB.prepare("UPDATE files SET statuses = ?, check_domain = ? WHERE track_id = ?").bind(statuses, read.checkDomain, track.id),
   ]
   // A label removed from the track is removed from its releases.
@@ -130,6 +151,21 @@ export async function updateTrack(env: Env, owner: TrackOwner, track: ReleaseTra
   const updated = (await getTrack(env, owner, track.id))!
   const pruned = await pruneTrack(env, owner, updated, now)
   return { track: updated, pruned }
+}
+
+/**
+ * The channels of tracks by id, read in one query, for code that offers releases from several tracks. A release
+ * without a track (null) or of a track not found has the default channels.
+ */
+export async function channelsByTrack(env: Env, trackIds: (string | null)[]): Promise<(trackId: string | null) => ChannelDef[]> {
+  const ids = [...new Set(trackIds.filter((id): id is string => Boolean(id)))]
+  const found = new Map<string, ChannelDef[]>()
+  for (let i = 0; i < ids.length; i += 90) {
+    const chunk = ids.slice(i, i + 90)
+    const rows = (await env.DB.prepare(`SELECT id, channels FROM release_tracks WHERE id IN (${chunk.map(() => "?").join(",")})`).bind(...chunk).all<{ id: string; channels: string | null }>()).results
+    for (const r of rows) found.set(r.id, readTrackChannels(r.channels))
+  }
+  return (trackId) => (trackId && found.get(trackId)) || DEFAULT_CHANNELS
 }
 
 /** Updates that take the labels a track no longer defines off its releases. One statement per release that changes. */
@@ -185,6 +221,9 @@ export async function deleteTrack(env: Env, owner: TrackOwner, track: ReleaseTra
     if (!moveTo) return { error: `The track "${track.name}" has ${count} release${count === 1 ? "" : "s"}. Choose a track to move ${count === 1 ? "it" : "them"} to, or delete ${count === 1 ? "it" : "them"} first.`, status: 409 }
     const target = await getTrack(env, owner, moveTo)
     if (!target || target.id === track.id) return { error: "Choose another track of the same app or licence to move the releases to.", status: 422 }
+    // Releases keep the labels the target track also defines; a channel it does not have becomes stable.
+    const targetChannels = readTrackChannels(target.channels).map((c) => c.key)
+    statements.push(env.DB.prepare(`UPDATE files SET channel = '${STABLE}' WHERE track_id = ? AND channel NOT IN (${targetChannels.map(() => "?").join(",")})`).bind(track.id, ...targetChannels))
     // Releases keep the labels the target track also defines.
     statements.push(...(await relabelStatements(env, track.id, readTrackLabels(target.labels))))
     statements.push(env.DB.prepare("UPDATE files SET track_id = ?, statuses = ?, check_domain = ? WHERE track_id = ?").bind(target.id, target.statuses, target.check_domain, track.id))
@@ -261,6 +300,7 @@ export async function applyTrackForm(env: Env, owner: TrackOwner, form: FormData
     check_domain: form.has("check_domain") ? form.get("check_domain") === "true" : undefined,
     keep_releases: form.has("keep_releases") ? String(form.get("keep_releases")) : undefined,
     labels: form.has("labels") ? readJsonField(String(form.get("labels"))) : undefined,
+    channels: form.has("channels") ? readJsonField(String(form.get("channels"))) : undefined,
   }
   if (intent === "create-track") {
     const created = await createTrack(env, owner, input)

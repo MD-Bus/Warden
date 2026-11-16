@@ -16,6 +16,13 @@ The export contains everything Warden stores, including the private signing key 
 
 Database migrations run by themselves on the first request after the update, and only move forward: to go back to an earlier version, restore the export.
 
+## 0.7 to 0.8 (channels)
+
+Back up D1 first. Migration 0020 runs by itself: every track keeps Stable and Beta, and every connected repository becomes its track's Stable repository, following any branch, so tags publish exactly as before (a version with a suffix still goes to Beta).
+
+- **Site code:** no change. A check without a channel still gets stable releases, `channel=beta` still gets the newest of stable and beta, and an unknown channel still gets stable. The response is the same.
+- **API:** a release's `channel` can be any channel of its track, not only `stable` or `beta`: code that validates it against those two should accept any string. Tracks have `channels` and `sources`; `source` is still the Stable repository. `/tracks/{track}/source` paths act on Stable without `?channel=`, as before.
+
 ## 0.6 to 0.7 (release labels)
 
 Back up D1 first. Migration 0019 runs by itself.

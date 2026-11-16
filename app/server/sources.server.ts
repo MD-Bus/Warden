@@ -658,7 +658,7 @@ export async function selectSource(env: Env, sources: ReleaseSource[], event: Ex
     }
     const access = await credentials(env, source)
     if ("error" in access) return { ignored: `Could not check the branch ${source.branch}: ${access.error}` }
-    const result = await PROVIDER_IMPLEMENTATIONS[source.provider].branchContains(access, source.branch, event.commit || event.tag)
+    const result = await PROVIDER_IMPLEMENTATIONS[source.provider].branchContains(access, source.branch, event.tag)
     if ("error" in result) return { ignored: `Could not check the branch ${source.branch}: ${result.error}` }
     if (result.contains) accepted.push(source)
   }

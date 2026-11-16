@@ -65,9 +65,11 @@ export const github: SourceProvider = {
     return { ok: true, private: repo.private === true, id: typeof repo.id === "number" ? repo.id : null }
   },
 
-  async branchContains(source, branch, ref) {
+  async branchContains(source, branch, tag) {
     // Comparing the branch with the tag: "identical" or "behind" means the tagged commit is in the branch's history.
-    const response = await fetch(`${API}/repos/${repoPath(source)}/compare/${encodeURIComponent(branch)}...${encodeURIComponent(ref)}`, { headers: headers(source) })
+    // Both are fully qualified refs, so a tag and a branch with the same name are not confused. The tag goes by name:
+    // compare answers 404 for the SHA of an annotated tag object, which is what a push event carries.
+    const response = await fetch(`${API}/repos/${repoPath(source)}/compare/${encodeURIComponent(`refs/heads/${branch}`)}...${encodeURIComponent(`refs/tags/${tag}`)}`, { headers: headers(source) })
     if (response.status === 404) return { contains: false }
     if (!response.ok) return failure(response, `the branch "${branch}"`)
     const result = (await response.json()) as { status?: string }

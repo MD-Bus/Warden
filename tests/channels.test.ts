@@ -113,14 +113,25 @@ const SHA_MAIN = "a".repeat(40)
 const SHA_BETA = "b".repeat(40)
 const SHA_OTHER = "c".repeat(40)
 
-/** GitHub stand-in: SHA_MAIN is on main and on beta (merged), SHA_BETA only on beta, SHA_OTHER on neither. */
+/**
+ * GitHub stand-in: SHA_MAIN is on main and on beta (merged), SHA_BETA only on beta, SHA_OTHER on neither. Tags are
+ * annotated: the SHA in a push event is the tag object's, which compare answers 404 for, as GitHub does.
+ */
+const TAG_OBJECT = "f".repeat(40)
 function github() {
   const on: Record<string, string[]> = { main: [SHA_MAIN], beta: [SHA_MAIN, SHA_BETA] }
+  const tags: Record<string, string> = { "v1.5.0-beta.1": SHA_BETA, "v1.5.0": SHA_MAIN, "v9.0.0": SHA_OTHER }
   return mockFetch((s: Sent) => {
     const base = "https://api.github.com/repos/harbor-studio/harbor-theme"
     if (s.url === base) return Response.json({ private: false, id: 7 })
     const compare = s.url.match(/\/compare\/([^.]+)\.\.\.(.+)$/)
-    if (s.url.startsWith(`${base}/compare/`) && compare) return Response.json({ status: on[decodeURIComponent(compare[1])]?.includes(compare[2]) ? "behind" : "diverged" })
+    if (s.url.startsWith(`${base}/compare/`) && compare) {
+      const branch = decodeURIComponent(compare[1]).replace(/^refs\/heads\//, "")
+      const head = decodeURIComponent(compare[2])
+      const commit = head.startsWith("refs/tags/") ? tags[head.slice("refs/tags/".length)] : /^[0-9a-f]{40}$/.test(head) && head !== TAG_OBJECT ? head : undefined
+      if (!on[branch] || !commit) return new Response("not found", { status: 404 })
+      return Response.json({ status: on[branch].includes(commit) ? "behind" : "diverged" })
+    }
     if (s.url.startsWith(`${base}/zipball/`)) return new Response(buildZip([["harbor-studio-harbor-theme-1/style.css", "/* Harbor */"]]))
     return new Response("not found", { status: 404 })
   })
@@ -147,13 +158,13 @@ test("two channels follow two branches of one repository: a tag publishes on the
   assert.deepEqual([beta.source.channel, beta.source.branch], ["beta", "beta"])
 
   // A tag only on beta: the beta channel's webhook publishes it, the stable one's ignores it.
-  assert.match((await deliver(env, ctx, stable.source, { ref: "refs/tags/v1.5.0-beta.1", after: SHA_BETA })).ignored, /another channel/)
-  assert.equal((await deliver(env, ctx, beta.source, { ref: "refs/tags/v1.5.0-beta.1", after: SHA_BETA })).import.state, "pending")
+  assert.match((await deliver(env, ctx, stable.source, { ref: "refs/tags/v1.5.0-beta.1", after: TAG_OBJECT })).ignored, /another channel/)
+  assert.equal((await deliver(env, ctx, beta.source, { ref: "refs/tags/v1.5.0-beta.1", after: TAG_OBJECT })).import.state, "pending")
   // A tag on main, whose commit beta also has (after a merge): GitHub names main, so stable publishes it.
-  assert.equal((await deliver(env, ctx, stable.source, { ref: "refs/tags/v1.5.0", after: SHA_MAIN, base_ref: "refs/heads/main" })).import.state, "pending")
-  assert.match((await deliver(env, ctx, beta.source, { ref: "refs/tags/v1.5.0", after: SHA_MAIN, base_ref: "refs/heads/main" })).ignored, /another channel/)
+  assert.equal((await deliver(env, ctx, stable.source, { ref: "refs/tags/v1.5.0", after: TAG_OBJECT, base_ref: "refs/heads/main" })).import.state, "pending")
+  assert.match((await deliver(env, ctx, beta.source, { ref: "refs/tags/v1.5.0", after: TAG_OBJECT, base_ref: "refs/heads/main" })).ignored, /another channel/)
   // A tag on no followed branch publishes nothing.
-  assert.match((await deliver(env, ctx, stable.source, { ref: "refs/tags/v9.0.0", after: SHA_OTHER })).ignored, /not on a branch/)
+  assert.match((await deliver(env, ctx, stable.source, { ref: "refs/tags/v9.0.0", after: TAG_OBJECT })).ignored, /not on a branch/)
   await settle()
 
   const files = await listFiles(env, owner)

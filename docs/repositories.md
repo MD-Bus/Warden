@@ -78,6 +78,7 @@ Each channel of a track can follow a repository: in the track's card, every chan
 
 Pushing a tag still publishes, as before (branch pushes publish nothing). Warden asks GitHub which branch contains the tag's commit: a tag made on `beta` publishes on Beta, a tag made on `main` on Stable. When both branches contain the commit (right after merging `beta` into `main`, for example), the branch GitHub names in the delivery wins, then a channel that follows a branch, then Stable. A tag on no followed branch publishes nothing, and the delivery says why.
 
+- Push the branch before the tag (`git push origin main` then `git push origin v1.5.0`, or `git push --follow-tags`). A tag whose commit is not yet on the branch on GitHub when the tag arrives is not published; publish it afterwards with *Publish a tag*, which publishes on that channel without the branch check.
 - A channel without a branch takes tags made on any branch. In one track, only one channel of a repository can do that, and the others need their own branch.
 - Another track of the same repository still needs its own tag prefix.
 - Each channel's repository has its own settings, webhook (token connection), recent tags, *Publish a tag* and pause.

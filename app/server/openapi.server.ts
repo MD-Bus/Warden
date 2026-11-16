@@ -18,7 +18,7 @@ export function openApiSpec(origin: string) {
   // A repository connected to an app or a licence (docs/repositories.md). Both owners have the same endpoints.
   const sourceDoc = "{ id, track_id, tag_prefix, connection (app | token), provider, repository, trigger, package_folder, has_token, enabled, webhook_url, webhook_secret, created_at, updated_at, last_delivery_at }. webhook_secret is omitted for read keys; the access token is never returned."
   const importDoc = "{ id, tag, version, commit, state (pending | imported | skipped | failed), detail, file_id, started_at, finished_at }"
-  const trackDoc = "{ id, name, statuses, check_domain, position, keep_releases (null = every release is kept), releases, source (see the track's /source) | null, created_at, updated_at }"
+  const trackDoc = "{ id, name, statuses, check_domain, position, keep_releases (null = every release is kept), labels ([{ key, name, color }], the labels its releases can carry), releases, source (see the track's /source) | null, created_at, updated_at }"
   const trackParam = { name: "track", in: "path", required: true, description: "Track id (trk_...) or name.", schema: { type: "string" } }
   const trackBody = {
     type: "object",
@@ -28,6 +28,12 @@ export function openApiSpec(origin: string) {
       check_domain: { type: "boolean", default: true },
       position: { type: "integer", minimum: 0 },
       keep_releases: { type: ["integer", "null"], minimum: 1, maximum: 1000, description: "Release limit: the track keeps this many releases, the newest by version. Older ones are deleted with their files when a release is added, and at once when the limit is set or lowered (the response of a PATCH then has `pruned`). The newest stable and the newest beta release are never deleted. null keeps every release." },
+      labels: {
+        type: "array",
+        maxItems: 20,
+        description: "Replaces the labels the track's releases can carry. A label without a key takes one from its name (Bug fix: bug_fix); send the key of an existing label to keep it while renaming it. A label removed here is removed from the track's releases. A new track gets urgent, security, bug_fix and feature.",
+        items: { type: "object", required: ["name", "color"], properties: { key: { type: "string", pattern: "^[a-z][a-z0-9_]{0,31}$" }, name: { type: "string", maxLength: 30 }, color: { type: "string", pattern: "^#[0-9a-fA-F]{6}$" } } },
+      },
     },
   }
   // Release tracks of an app or a licence, each with an optional connected repository (docs/releases.md, docs/repositories.md).
@@ -102,6 +108,7 @@ export function openApiSpec(origin: string) {
     { name: "version", in: "query", description: "Makes the file a release, offered as an update. Numbers separated by dots with an optional suffix: 1.4.0, 2.0.0-beta.1", schema: { type: "string", maxLength: 40 } },
     { name: "channel", in: "query", description: "Beta releases are offered only to sites that check with channel=beta", schema: { enum: ["stable", "beta"], default: "stable" } },
     { name: "changelog", in: "query", description: "Public release notes, returned to sites with the release. Can also be set afterwards with PATCH", schema: { type: "string", maxLength: 10000 } },
+    { name: "labels", in: "query", description: "Releases: label keys of the release's track, comma separated (urgent,security). Sent to sites with the release", schema: { type: "string" } },
     { name: "notes", in: "query", description: "Internal notes, never sent to sites", schema: { type: "string" } },
   ]
 
@@ -471,6 +478,7 @@ export function openApiSpec(origin: string) {
             id: { type: "string" }, name: { type: "string" }, track: { type: ["string", "null"], description: "The track of a release; null for an attachment" },
             version: { type: "string", description: "Empty for an attachment. A file with a version is a release" },
             channel: { enum: ["stable", "beta"] }, changelog: { type: "string", description: "Public release notes" }, notes: { type: "string", description: "Internal" },
+            labels: { type: "array", items: { type: "string" }, description: "Keys of the release's labels, from its track's labels. Sent to sites with the release. Empty for an attachment" },
             size: { type: "integer" }, content_type: { type: "string" }, sha256: { type: ["string", "null"], description: "Hex SHA-256 of the file. null for files uploaded before checksums were recorded" },
             signature: { type: ["string", "null"], description: "Ed25519 signature of `sha256` (its 64 hex characters), base64; verify with GET /signing-key. null when `sha256` is null" },
             withdrawn: { type: "boolean", description: "A withdrawn release is not offered and cannot be downloaded (HTTP 410)" }, withdrawn_at: { type: ["string", "null"] },
@@ -487,6 +495,7 @@ export function openApiSpec(origin: string) {
             track: { type: "string", description: "Releases: move the release to this track (id or name)" },
             version: { type: "string", description: "Empty string turns a release into an attachment" }, channel: { enum: ["stable", "beta"] },
             changelog: { type: "string", maxLength: 10000 }, notes: { type: "string", maxLength: 500 },
+            labels: { type: "array", items: { type: "string" }, description: "Releases: replaces the labels, with label keys of the release's track. [] removes them all" },
             withdrawn: { type: "boolean", description: "true withdraws the release, false restores it" },
           },
         },

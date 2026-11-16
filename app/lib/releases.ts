@@ -20,30 +20,6 @@ export const MAX_VERSION_LENGTH = 40
 export const MAX_CHANGELOG_LENGTH = 10_000
 
 /**
- * The text that marks a release urgent. Warden has no flag for it: sites read it in the release notes they are sent, and a site
- * that stages its updates installs an urgent release at once. "Mark as urgent" adds it, and the badge looks for it, so the
- * notes stay the one place it lives.
- */
-export const URGENT_MARKER = "[urgent]"
-
-/** Whether release notes carry the urgent marker (any case, anywhere). */
-export function isUrgent(changelog: string | null | undefined): boolean {
-  return (changelog ?? "").toLowerCase().includes(URGENT_MARKER)
-}
-
-/** The notes with the urgent marker on a line of its own at the end (unchanged when it is there), within the notes limit. */
-export function withUrgent(changelog: string): string {
-  if (isUrgent(changelog)) return changelog
-  const base = changelog.trim().slice(0, MAX_CHANGELOG_LENGTH - URGENT_MARKER.length - 2)
-  return base ? `${base}\n\n${URGENT_MARKER}` : URGENT_MARKER
-}
-
-/** The notes without the urgent marker, and without the blank space it leaves behind. */
-export function withoutUrgent(changelog: string): string {
-  return changelog.replace(/\s*\[urgent\]/gi, "").trim()
-}
-
-/**
  * A version: numeric parts separated by dots (1 to 4 of them, an optional leading "v"), then an optional pre-release
  * suffix ("-beta.2") and build suffix ("+build.7"). Examples: 1.4.0, v2.0, 3.1.0-rc.1.
  */

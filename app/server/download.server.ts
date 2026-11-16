@@ -3,6 +3,7 @@ import { evaluateFileAccess, type FileAccess } from "../lib/files"
 import { clientIp, reportUnknownKey } from "./guard.server"
 import { buildCheckResponse, KEY_PATTERN, normalizeDomain, type CheckResponse } from "../lib/license"
 import { isChannel, latestRelease, type Channel } from "../lib/releases"
+import { splitLabelKeys } from "../lib/release-labels"
 import { describeStatusKeys, type StatusSet } from "../lib/statuses"
 import { getFileForLicense, listFilesForLicense, releaseRule, type LicenseFile } from "./files.server"
 import { getLicense, getLicenseByKey, listActivations, type License } from "./licenses.server"
@@ -52,6 +53,8 @@ export type VisibleFile = {
   version: string
   channel: Channel
   changelog: string
+  /** Keys of the release's labels, as its track defines them. Empty for an attachment. */
+  labels: string[]
   size: number
   sha256: string
   source: "licence" | "app"
@@ -81,6 +84,7 @@ export async function visibleFiles(env: Env, license: License, domain: string | 
       version: f.version,
       channel: f.channel,
       changelog: f.changelog,
+      labels: splitLabelKeys(f.labels),
       size: f.size,
       sha256: f.sha256,
       source: f.app_id ? "app" : "licence",
@@ -105,6 +109,7 @@ export async function releaseSummary(f: VisibleFile, key: SigningKey) {
     version: f.version,
     channel: f.channel,
     changelog: f.changelog,
+    labels: f.labels,
     size: f.size,
     sha256: f.sha256 || null,
     signature: await signRelease(key, f.sha256),
@@ -120,6 +125,7 @@ const publicEntry = async (f: VisibleFile, key: SigningKey) => ({
   version: f.version,
   channel: f.channel,
   changelog: f.changelog,
+  labels: f.labels,
   size: f.size,
   sha256: f.sha256 || null,
   signature: await signRelease(key, f.sha256),

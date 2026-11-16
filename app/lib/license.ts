@@ -73,6 +73,8 @@ export type ReleaseInfo = {
   version: string
   channel: string
   changelog: string
+  /** Keys of the release's labels, such as urgent or security, as its track defines them. */
+  labels: string[]
   size: number
   sha256: string | null
   /** Ed25519 signature of `sha256` (the 64 hex characters), base64. Null when the release has no checksum. */

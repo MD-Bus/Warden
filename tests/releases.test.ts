@@ -2,7 +2,7 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
 import { makeBucket, makeCtx, makeDb } from "./helpers/d1.ts"
-import { compareVersions, isUrgent, isValidVersion, latestRelease, MAX_CHANGELOG_LENGTH, readReportedVersion, siteUpdateState, sortForDisplay, URGENT_MARKER, withUrgent, withoutUrgent } from "../app/lib/releases.ts"
+import { compareVersions, isValidVersion, latestRelease, readReportedVersion, siteUpdateState, sortForDisplay } from "../app/lib/releases.ts"
 import { createApp } from "../app/server/apps.server.ts"
 import { handleCheck } from "../app/server/check.server.ts"
 import { handleDownload } from "../app/server/download.server.ts"
@@ -257,49 +257,4 @@ test("API: release fields, withdrawal and the versions sites run", async () => {
   })
   const sites = (await call("GET", `/licenses/${lic.id}/activations`)).json.data
   assert.equal(sites.find((s: any) => s.domain === "b.com").version, "1.1.0")
-})
-
-test("the urgent marker is added to the release notes, found in any case, and removed again", () => {
-  assert.equal(isUrgent("Fixes a bug. [URGENT]"), true)
-  assert.equal(isUrgent("Fixes a bug."), false)
-  assert.equal(isUrgent(""), false)
-
-  assert.equal(withUrgent(""), URGENT_MARKER)
-  assert.equal(withUrgent("Fixes a bug."), `Fixes a bug.\n\n${URGENT_MARKER}`)
-  assert.equal(withUrgent("Fixes a bug. [Urgent]"), "Fixes a bug. [Urgent]", "Already marked: unchanged.")
-
-  assert.equal(withoutUrgent(withUrgent("Fixes a bug.")), "Fixes a bug.")
-  assert.equal(withoutUrgent("[urgent]"), "")
-  assert.equal(withoutUrgent("Fixes a bug. [URGENT]"), "Fixes a bug.")
-})
-
-test("marking urgent keeps the notes within their limit", () => {
-  const marked = withUrgent("x".repeat(MAX_CHANGELOG_LENGTH))
-  assert.ok(marked.length <= MAX_CHANGELOG_LENGTH)
-  assert.equal(isUrgent(marked), true)
-})
-
-test("an urgent mark made on a release reaches sites in the check answer, and can be taken off", async () => {
-  const { env, ctx, settle } = setup()
-  const created = await createApp(env, { name: "Harbor Theme", slug: "harbor-theme", description: "", default_duration_days: null, default_status: "active", default_max_sites: 2, default_message: "", notes: "" })
-  assert.ok("app" in created)
-  const app = created.app
-  const license = await createLicense(env, { ...licenseInput, app_id: app.id, max_sites: 2 })
-  const file = await release(env, { app }, "1.4.0", { changelog: "Faster gallery.", statuses: "active" })
-
-  const latest = async () => {
-    const res = await handleCheck(new Request(`${ORIGIN}/check/${license.license_key}?domain=harborstudio.com&version=1.3.0`), env, ctx, license.license_key)
-    await settle()
-    return ((await res.json()) as any).update.latest
-  }
-
-  // What the "Mark as urgent" button sends: the notes with the marker added.
-  const marked = await updateFile(env, { app }, file, { changelog: withUrgent(file.changelog) })
-  assert.ok("file" in marked, JSON.stringify(marked))
-  assert.equal(isUrgent((await latest()).changelog), true, "Sites are sent the marker with the release.")
-  assert.match((await latest()).changelog, /^Faster gallery\./, "The notes that were there stay.")
-
-  const unmarked = await updateFile(env, { app }, marked.file, { changelog: withoutUrgent(marked.file.changelog) })
-  assert.ok("file" in unmarked, JSON.stringify(unmarked))
-  assert.equal((await latest()).changelog, "Faster gallery.")
 })

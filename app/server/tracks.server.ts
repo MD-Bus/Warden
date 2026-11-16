@@ -1,4 +1,5 @@
 import { defaultReleaseStatuses } from "../lib/files"
+import { DEFAULT_RELEASE_LABELS, keepKnownLabels, parseLabelDefinitions, readTrackLabels, splitLabelKeys, type ReleaseLabel } from "../lib/release-labels"
 import { readKeepReleases, releasesToPrune } from "../lib/releases"
 import { describeStatusKeys, parseStatusKeys, type StatusSet } from "../lib/statuses"
 import { MAX_TRACK_NAME, trackNameError, trackOverlaps, trackStatusKeys } from "../lib/tracks"
@@ -20,6 +21,8 @@ export type ReleaseTrack = {
   check_domain: number
   /** How many releases the track keeps; null keeps all. Older ones are deleted. */
   keep_releases: number | null
+  /** The labels its releases can carry, as JSON; null (a track from before labels) means the default labels. Read with readTrackLabels. */
+  labels: string | null
   position: number
   created_at: number
   updated_at: number
@@ -50,7 +53,7 @@ export async function findTrack(env: Env, owner: TrackOwner, ref: string): Promi
   return tracks.find((t) => t.id === ref) ?? tracks.find((t) => t.name.toLowerCase() === ref.trim().toLowerCase()) ?? null
 }
 
-export type TrackInput = { name?: unknown; statuses?: unknown; check_domain?: unknown; position?: unknown; keep_releases?: unknown }
+export type TrackInput = { name?: unknown; statuses?: unknown; check_domain?: unknown; position?: unknown; keep_releases?: unknown; labels?: unknown }
 
 function overlapError(overlaps: { status: string; track: ReleaseTrack }[], set: StatusSet): string {
   const first = overlaps[0]
@@ -59,7 +62,7 @@ function overlapError(overlaps: { status: string; track: ReleaseTrack }[], set: 
 }
 
 /** Reads and validates the fields of a track. `current` supplies the values the input leaves out. */
-async function readTrack(env: Env, owner: TrackOwner, input: TrackInput, current: ReleaseTrack | null): Promise<{ name: string; statuses: string[]; checkDomain: number; position: number; keep: number | null } | Failure> {
+async function readTrack(env: Env, owner: TrackOwner, input: TrackInput, current: ReleaseTrack | null): Promise<{ name: string; statuses: string[]; checkDomain: number; position: number; keep: number | null; labels: ReleaseLabel[] } | Failure> {
   const set = await statusSetOf(env, owner)
   const rawName = input.name === undefined ? (current?.name ?? "") : input.name
   if (typeof rawName !== "string") return { error: "name must be a string.", status: 422 }
@@ -82,7 +85,14 @@ async function readTrack(env: Env, owner: TrackOwner, input: TrackInput, current
   const position = input.position === undefined ? (current?.position ?? tracks.reduce((n, t) => Math.max(n, t.position + 1), 0)) : (input.position as number)
   const keep = input.keep_releases === undefined ? { keep: current?.keep_releases ?? null } : readKeepReleases(input.keep_releases)
   if ("error" in keep) return { error: keep.error, status: 422 }
-  return { name: rawName.trim().slice(0, MAX_TRACK_NAME), statuses, checkDomain, position, keep: keep.keep }
+  let labels = current ? readTrackLabels(current.labels) : DEFAULT_RELEASE_LABELS
+  if (input.labels !== undefined) {
+    const parsed = parseLabelDefinitions(input.labels)
+    if ("error" in parsed) return { error: parsed.error, status: 422 }
+    // A label's key is what sites read: an existing label keeps its key when it is renamed.
+    labels = parsed.labels
+  }
+  return { name: rawName.trim().slice(0, MAX_TRACK_NAME), statuses, checkDomain, position, keep: keep.keep, labels }
 }
 
 export async function createTrack(env: Env, owner: TrackOwner, input: TrackInput, now = Date.now()): Promise<{ track: ReleaseTrack } | Failure> {
@@ -90,9 +100,9 @@ export async function createTrack(env: Env, owner: TrackOwner, input: TrackInput
   if ("error" in read) return read
   const id = newId("trk")
   await env.DB.prepare(
-    "INSERT INTO release_tracks (id, app_id, license_id, name, statuses, check_domain, position, keep_releases, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    "INSERT INTO release_tracks (id, app_id, license_id, name, statuses, check_domain, position, keep_releases, labels, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
   )
-    .bind(id, "app" in owner ? owner.app.id : null, "license" in owner ? owner.license.id : null, read.name, read.statuses.join(","), read.checkDomain, read.position, read.keep, now, now)
+    .bind(id, "app" in owner ? owner.app.id : null, "license" in owner ? owner.license.id : null, read.name, read.statuses.join(","), read.checkDomain, read.position, read.keep, JSON.stringify(read.labels), now, now)
     .run()
   return { track: (await getTrack(env, owner, id))! }
 }
@@ -106,9 +116,11 @@ export async function updateTrack(env: Env, owner: TrackOwner, track: ReleaseTra
   if ("error" in read) return read
   const statuses = read.statuses.join(",")
   const statements = [
-    env.DB.prepare("UPDATE release_tracks SET name = ?, statuses = ?, check_domain = ?, position = ?, keep_releases = ?, updated_at = ? WHERE id = ?").bind(read.name, statuses, read.checkDomain, read.position, read.keep, now, track.id),
+    env.DB.prepare("UPDATE release_tracks SET name = ?, statuses = ?, check_domain = ?, position = ?, keep_releases = ?, labels = ?, updated_at = ? WHERE id = ?").bind(read.name, statuses, read.checkDomain, read.position, read.keep, JSON.stringify(read.labels), now, track.id),
     env.DB.prepare("UPDATE files SET statuses = ?, check_domain = ? WHERE track_id = ?").bind(statuses, read.checkDomain, track.id),
   ]
+  // A label removed from the track is removed from its releases.
+  if (input.labels !== undefined) statements.push(...(await relabelStatements(env, track.id, read.labels)))
   if ("license" in owner && (statuses !== track.statuses || read.checkDomain !== track.check_domain)) {
     const set = await statusSetOf(env, owner)
     const detail = `Track updated: ${read.name} (receives ${describeStatusKeys(read.statuses, set) || "no status"})`
@@ -118,6 +130,15 @@ export async function updateTrack(env: Env, owner: TrackOwner, track: ReleaseTra
   const updated = (await getTrack(env, owner, track.id))!
   const pruned = await pruneTrack(env, owner, updated, now)
   return { track: updated, pruned }
+}
+
+/** Updates that take the labels a track no longer defines off its releases. One statement per release that changes. */
+async function relabelStatements(env: Env, trackId: string, labels: ReleaseLabel[]): Promise<D1PreparedStatement[]> {
+  const rows = (await env.DB.prepare("SELECT id, labels FROM files WHERE track_id = ? AND labels <> ''").bind(trackId).all<{ id: string; labels: string }>()).results
+  return rows.flatMap((r) => {
+    const kept = keepKnownLabels(splitLabelKeys(r.labels), labels).join(",")
+    return kept === r.labels ? [] : [env.DB.prepare("UPDATE files SET labels = ? WHERE id = ?").bind(kept, r.id)]
+  })
 }
 
 /** The releases a track would delete now to respect its limit, oldest first. Nothing is deleted. */
@@ -164,6 +185,8 @@ export async function deleteTrack(env: Env, owner: TrackOwner, track: ReleaseTra
     if (!moveTo) return { error: `The track "${track.name}" has ${count} release${count === 1 ? "" : "s"}. Choose a track to move ${count === 1 ? "it" : "them"} to, or delete ${count === 1 ? "it" : "them"} first.`, status: 409 }
     const target = await getTrack(env, owner, moveTo)
     if (!target || target.id === track.id) return { error: "Choose another track of the same app or licence to move the releases to.", status: 422 }
+    // Releases keep the labels the target track also defines.
+    statements.push(...(await relabelStatements(env, track.id, readTrackLabels(target.labels))))
     statements.push(env.DB.prepare("UPDATE files SET track_id = ?, statuses = ?, check_domain = ? WHERE track_id = ?").bind(target.id, target.statuses, target.check_domain, track.id))
   }
   statements.push(
@@ -216,6 +239,15 @@ export async function overriddenStatuses(env: Env, license: License): Promise<Se
   return new Set(own.flatMap(trackStatusKeys))
 }
 
+/** A JSON form field; text that is not JSON is passed on as it is, so validation reports it. */
+function readJsonField(text: string): unknown {
+  try {
+    return JSON.parse(text)
+  } catch {
+    return text
+  }
+}
+
 /**
  * Handles the track intents of an app or licence page: "create-track", "update-track" and "delete-track". Returns
  * `{ ok: true }` or `{ error }` for the page's fetcher, or null when the intent is not a track intent.
@@ -228,6 +260,7 @@ export async function applyTrackForm(env: Env, owner: TrackOwner, form: FormData
     statuses: form.has("statuses") ? String(form.get("statuses")) : undefined,
     check_domain: form.has("check_domain") ? form.get("check_domain") === "true" : undefined,
     keep_releases: form.has("keep_releases") ? String(form.get("keep_releases")) : undefined,
+    labels: form.has("labels") ? readJsonField(String(form.get("labels"))) : undefined,
   }
   if (intent === "create-track") {
     const created = await createTrack(env, owner, input)

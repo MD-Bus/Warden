@@ -4,8 +4,20 @@ All notable changes, newest first. Warden follows [semantic versioning](https://
 
 **Next, towards 1.0.0** (details in [Roadmap.md](Roadmap.md)):
 
-- **0.7.0, trust**: end-to-end tests on real Cloudflare (GitHub App, private repositories, phone width, CI), backups and export, two-factor sign-in or Cloudflare Access, a complete OpenAPI description checked by tests, independent security review
+- **0.8.0, trust**: end-to-end tests on real Cloudflare (GitHub App, private repositories, phone width, CI), backups and export, two-factor sign-in or Cloudflare Access, a complete OpenAPI description checked by tests, independent security review
 - **1.0.0**: the check response and the API are frozen
+
+## 0.7.0 (2026-11-15)
+
+Release labels replace the urgent marker of 0.6.3. Migration 0019 runs by itself. See [upgrade-notes.md](docs/upgrade-notes.md).
+
+### Added
+
+- **Release labels.** Each track defines labels with a name and a colour (*Edit track*, *Release labels*); a new track starts with Urgent, Security, Bug fix and New feature. A release carries any number of its track's labels, chosen at upload, in *Edit* or from the release's menu (*Labels*), and shown as coloured badges. Sites receive the keys in `labels` with the release: in `update.latest` of the check answer, and in `latest` and `files` of the download list. A label's key is made from its name and fixed once saved. Removing a label from a track removes it from its releases; a release moved to another track keeps the labels that track also has. API: upload `labels=urgent,security`, file `PATCH { "labels": [...] }`, track `labels: [{ key, name, color }]`. See [releases.md](docs/releases.md#release-labels).
+
+### Removed
+
+- **Mark as urgent**, and the `[urgent]` marker in release notes, which 0.6.3 added. Use the Urgent label. Migration 0019 gives every release whose notes contain `[urgent]` the Urgent label and takes out the marker the button added. **Site code that looks for `[urgent]` in `changelog` must read `labels` instead**: `in_array('urgent', $latest['labels'])`.
 
 ## 0.6.3 (2026-11-11)
 

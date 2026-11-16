@@ -1,5 +1,6 @@
 import { cleanFileName, defaultReleaseStatuses, MAX_FILE_BYTES } from "../lib/files"
 import { CHANNELS, compareVersions, isChannel, isValidVersion, MAX_CHANGELOG_LENGTH, MAX_VERSION_LENGTH, type Channel } from "../lib/releases"
+import { keepKnownLabels, parseReleaseLabels, readTrackLabels, splitLabelKeys } from "../lib/release-labels"
 import { describeStatusKeys, parseStatusKeys, splitStatusKeys, type StatusSet } from "../lib/statuses"
 import type { App } from "./apps.server"
 import type { License } from "./licenses.server"
@@ -30,6 +31,8 @@ export type LicenseFile = {
   channel: Channel
   /** Public release notes. */
   changelog: string
+  /** Releases: keys of the labels the release carries, comma separated, from its track's labels. Empty for an attachment. */
+  labels: string
   /** Hex SHA-256 of the stored file. Empty for files uploaded before checksums were recorded. */
   sha256: string
   /** Set when the release was withdrawn: no longer offered or downloadable. */
@@ -112,6 +115,8 @@ export type StoreInput = {
   notes?: string
   channel?: string
   changelog?: string
+  /** Releases: label keys of the release's track (array or comma separated). */
+  labels?: unknown
   contentType?: string | null
   size: number
   body: ReadableStream | null
@@ -188,10 +193,16 @@ export async function storeFile(env: Env, owner: FileOwner, input: StoreInput): 
   let statuses: string[] | null
   let checkDomain = input.checkDomain === false ? 0 : 1
   let trackId: string | null = null
+  let labels: string[] = []
   if (version.version) {
     const resolved = await resolveTrackForRelease(env, owner, input.track ?? null, input.statuses, input.checkDomain !== false)
     if ("error" in resolved) return resolved
     trackId = resolved.track.id
+    if (input.labels !== undefined && input.labels !== null) {
+      const parsed = parseReleaseLabels(input.labels, readTrackLabels(resolved.track.labels))
+      if ("error" in parsed) return { error: parsed.error, status: 422 }
+      labels = parsed.keys
+    }
     statuses = resolved.track.statuses.split(",").filter(Boolean)
     checkDomain = resolved.track.check_domain
     const existing = await releaseWithVersion(env, trackId, version.version)
@@ -210,11 +221,11 @@ export async function storeFile(env: Env, owner: FileOwner, input: StoreInput): 
   try {
     const statements = [
       env.DB.prepare(
-        `INSERT INTO files (id, license_id, app_id, name, version, notes, channel, changelog, sha256, statuses, check_domain, size, content_type, r2_key, uploaded_at, track_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO files (id, license_id, app_id, name, version, notes, channel, changelog, labels, sha256, statuses, check_domain, size, content_type, r2_key, uploaded_at, track_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       ).bind(
         id, "license" in owner ? owner.license.id : null, "app" in owner ? owner.app.id : null, name, version.version, (input.notes ?? "").trim().slice(0, 500),
-        channel.channel, (input.changelog ?? "").trim().slice(0, MAX_CHANGELOG_LENGTH), sha256, statuses.join(","), checkDomain, input.size, contentType, key, now, trackId
+        channel.channel, (input.changelog ?? "").trim().slice(0, MAX_CHANGELOG_LENGTH), labels.join(","), sha256, statuses.join(","), checkDomain, input.size, contentType, key, now, trackId
       ),
     ]
     if ("license" in owner) statements.push(logChange(env, owner.license, now, `File added: ${label} (available when ${describeStatusKeys(statuses, set)})`))
@@ -246,6 +257,8 @@ export type FileChanges = {
   notes?: string
   channel?: string
   changelog?: string
+  /** Releases: replaces the release's labels (label keys of its track, array or comma separated). */
+  labels?: unknown
   /** true withdraws the release, false restores it. */
   withdrawn?: boolean
 }
@@ -266,6 +279,7 @@ export async function updateFile(env: Env, owner: FileOwner, file: LicenseFile, 
   let checkDomain = file.check_domain
   let trackId: string | null = file.track_id
   let trackName: string | null = null
+  let labels = ""
   if (version.version) {
     let track = changes.track ? null : file.track_id ? await getTrack(env, owner, file.track_id) : null
     if (!track) {
@@ -281,6 +295,13 @@ export async function updateFile(env: Env, owner: FileOwner, file: LicenseFile, 
     trackName = track.name
     statuses = track.statuses
     checkDomain = track.check_domain
+    // Labels are the track's: given ones are checked against it; a release that moves keeps those its new track has.
+    const defined = readTrackLabels(track.labels)
+    if (changes.labels !== undefined) {
+      const parsed = parseReleaseLabels(changes.labels, defined)
+      if ("error" in parsed) return { error: parsed.error, status: 422 }
+      labels = parsed.keys.join(",")
+    } else labels = keepKnownLabels(splitLabelKeys(file.labels), defined).join(",")
   } else {
     trackId = null
     if (changes.statuses !== undefined) {
@@ -300,8 +321,8 @@ export async function updateFile(env: Env, owner: FileOwner, file: LicenseFile, 
   const notes = changes.notes === undefined ? file.notes : changes.notes.trim().slice(0, 500)
   const changelog = changes.changelog === undefined ? file.changelog : changes.changelog.trim().slice(0, MAX_CHANGELOG_LENGTH)
   const statements = [
-    env.DB.prepare("UPDATE files SET statuses = ?, check_domain = ?, track_id = ?, version = ?, notes = ?, channel = ?, changelog = ?, withdrawn_at = ? WHERE id = ?").bind(
-      statuses, checkDomain, trackId, version.version, notes, channel.channel, changelog, withdrawnAt, file.id
+    env.DB.prepare("UPDATE files SET statuses = ?, check_domain = ?, track_id = ?, version = ?, notes = ?, channel = ?, changelog = ?, labels = ?, withdrawn_at = ? WHERE id = ?").bind(
+      statuses, checkDomain, trackId, version.version, notes, channel.channel, changelog, labels, withdrawnAt, file.id
     ),
   ]
   if ("license" in owner) {
@@ -350,7 +371,7 @@ function logChange(env: Env, license: License, at: number, detail: string) {
 function readFileForm(form: FormData): FileChanges {
   const text = (name: string) => (form.has(name) ? String(form.get(name)) : undefined)
   const flag = (name: string) => (form.has(name) ? form.get(name) === "true" : undefined)
-  return { statuses: text("statuses"), checkDomain: flag("check_domain"), track: text("track") || undefined, version: text("version"), notes: text("notes"), channel: text("channel"), changelog: text("changelog"), withdrawn: flag("withdrawn") }
+  return { statuses: text("statuses"), checkDomain: flag("check_domain"), track: text("track") || undefined, version: text("version"), notes: text("notes"), channel: text("channel"), changelog: text("changelog"), labels: text("labels"), withdrawn: flag("withdrawn") }
 }
 
 /**

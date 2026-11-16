@@ -52,6 +52,7 @@ Labels say what kind of release it is: **Urgent**, **Security**, **Bug fix**, **
 A channel is a line of releases within a track: **Stable** for every site, **Beta** for sites that test early builds, or any channel you add (*Edit track*, *Channels*), such as *Release candidate* or *Nightly*. Up to 10 per track.
 
 - **Stable always exists** and cannot be removed. A site that sends no channel, or a channel the track does not have, receives Stable. That is how every site built before channels existed keeps working.
+- **No stable release means no update for sites without a channel.** Warden never falls back to another channel: a site that did not ask for beta builds is never offered one. Its licence stays valid; the check answers `available: false` and `latest: null` until a stable release is published, or a release is moved to Stable (*Edit*, *Channel*). The same applies to a site asking for a channel that has no release and includes none that has.
 - A channel can also **receive the releases of other channels**. Beta includes Stable by default, so a beta site is offered the newest of both, as before. A *Nightly* channel that includes Stable and Beta is offered the newest release of the three.
 - A channel has a **key**, which sites send (`?channel=release-candidate`). It is made from the name and stays fixed once saved.
 - **Each channel can follow its own repository**, or the same repository on its own branch: Stable follows `main`, Beta follows `beta`, and a tag publishes on the channel whose branch has it ([repositories.md](repositories.md#channels-and-branches)).
@@ -119,7 +120,7 @@ GET https://<your-worker>/check/<licence key>?tag=parent-theme&domain=harborstud
 }
 ```
 
-- `latest` is the newest release this licence can download **right now**, for this domain, in the site's channel: the release rule is applied exactly as for a download. A suspended licence is offered nothing; a release published only for Completed licences is offered once the licence is Completed.
+- `latest` is the newest release this licence can download **right now**, for this domain, in the site's channel: the release rule is applied exactly as for a download. A suspended licence is offered nothing; a release published only for Completed licences is offered once the licence is Completed. When the site's channel (and the channels it includes) has no release, `latest` is `null` ([Channels](#channels)).
 - `available` is `true` when `latest` is newer than `current`.
 - `labels` lists the keys of the release's labels, such as `urgent` ([release labels](#release-labels)); it is `[]` when the release has none.
 - `download_url` is a signed download link valid for 7 days ([files.md](files.md#download-links)). It carries the tag and domain and does not contain the licence key, so the site can hand it to its updater as is.
@@ -149,7 +150,7 @@ The version and channel a site sends are recorded with the site, per attached ap
 |---|---|
 | Up to date | On the latest offered release, or newer |
 | Behind | On an older version than the latest offered release |
-| No release for this status | The status of the licence receives no release, so there is nothing to compare with |
+| No release for this status | The status of the licence receives no release, or the site's channel has none (for example a track with only beta releases, and a site that asks for no channel), so there is nothing to compare with |
 | Not reported | The site never sent a version |
 
 - On a **licence**, the *Sites* tab lists each site with its version and state.

@@ -4,10 +4,12 @@ All notable changes, newest first. Warden follows [semantic versioning](https://
 
 **Next, towards 1.0.0** (details in [Roadmap.md](Roadmap.md)):
 
-- **0.7.0, trust**: end-to-end tests on real Cloudflare (GitHub App, private repositories, phone width, CI), backups and export, two-factor sign-in or Cloudflare Access, a complete OpenAPI description checked by tests, independent security review
+- **0.8.0, trust**: end-to-end tests on real Cloudflare (GitHub App, private repositories, phone width, CI), backups and export, two-factor sign-in or Cloudflare Access, a complete OpenAPI description checked by tests, independent security review
 - **1.0.0**: the check response and the API are frozen
 
-**Unreleased (version number not chosen yet).** Migration 0019 runs by itself. See [upgrade-notes.md](docs/upgrade-notes.md).
+## 0.7.0 (2026-11-15)
+
+Release labels replace the urgent marker of 0.6.3. Migration 0019 runs by itself. See [upgrade-notes.md](docs/upgrade-notes.md).
 
 ### Added
 

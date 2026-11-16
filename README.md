@@ -12,7 +12,7 @@ with independent statuses, shared or separate expiry dates, and app-owned releas
 <a href="https://deploy.workers.cloudflare.com/?url=https://github.com/momardia54/Warden"><img src="https://deploy.workers.cloudflare.com/button" alt="Deploy to Cloudflare"></a>
 </p>
 
-> **Status: pre-1.0 — version 0.6.3 (2026-11-11).** This README describes the tagged app licensing model. The API and data model may still change before 1.0.0; every change is listed in [CHANGELOG.md](CHANGELOG.md). The Deploy button installs `main`; an approved build on `develop` becomes the default installation after its release pull request is merged. See [Roadmap.md](Roadmap.md) for versioning and [Security.md](Security.md) for the security model.
+> **Status: pre-1.0 — version 0.7.0 (2026-11-15).** This README describes the tagged app licensing model. The API and data model may still change before 1.0.0; every change is listed in [CHANGELOG.md](CHANGELOG.md). The Deploy button installs `main`; an approved build on `develop` becomes the default installation after its release pull request is merged. See [Roadmap.md](Roadmap.md) for versioning and [Security.md](Security.md) for the security model.
 
 ![Warden overview](docs/screenshots/overview.jpg)
 
@@ -42,7 +42,7 @@ Tags are unique within a licence and separate from Git version tags or release t
 
 Release limit per track, accurate outdated and up-to-date sites, the optional `WARDEN_SIGNING_KEY` secret, and a clearer overview and licence list. Migrations run by themselves; site code needs no change. See the [upgrade notes](docs/upgrade-notes.md).
 
-## Release labels (unreleased)
+## Version 0.7.0: release labels
 
 Each release track defines labels with a colour (Urgent, Security, Bug fix, New feature by default, or your own), and each release carries any of them. Sites receive the keys in `labels` with the release, so an updater can, for example, install an urgent release at once. This replaces the 0.6.3 urgent marker: site code that reads `[urgent]` in the release notes must read `labels`. Migration 0019 runs by itself. See [releases.md](docs/releases.md#release-labels).
 

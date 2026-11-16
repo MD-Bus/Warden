@@ -16,7 +16,7 @@ The export contains everything Warden stores, including the private signing key 
 
 Database migrations run by themselves on the first request after the update, and only move forward: to go back to an earlier version, restore the export.
 
-## 0.6.3 to the next version (release labels)
+## 0.6 to 0.7 (release labels)
 
 Back up D1 first. Migration 0019 runs by itself.
 

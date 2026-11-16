@@ -41,7 +41,7 @@ A track that publishes often grows without end. Give it a **release limit** (*Ed
 
 Labels say what kind of release it is: **Urgent**, **Security**, **Bug fix**, **New feature**, or anything you define. Sites receive them with the release, so their update code can act on them, for example install an urgent release at once instead of waiting for its share of a staged rollout.
 
-- **Each track defines its labels**, each with a name and a colour (*Edit track*, *Release labels*). A new track starts with Urgent (`urgent`), Security (`security`), Bug fix (`bug_fix`) and New feature (`feature`); tracks created before migration 0019 use the same four until you change them. Up to 20 labels per track.
+- **Each track defines its labels**, each with a name and a colour (*Edit track*, *Release labels*). A new track starts with Urgent (`urgent`), Security (`security`), Bug fix (`bug_fix`) and New feature (`feature`); tracks created before 0.7.0 use the same four until you change them. Up to 20 labels per track.
 - A label has a **key**, which is what sites receive. It is made from the name when you add the label (*Long-term support* gives `long_term_support`) and **stays fixed once saved**, so renaming or recolouring a label never breaks site code.
 - **A release carries any number of its track's labels.** Choose them when you upload, in *Edit*, or from the release's menu, *Labels*. Each one shows as a badge in its colour.
 - Removing a label from a track removes it from the track's releases. A release moved to another track keeps only the labels that track also has.
@@ -128,7 +128,7 @@ Give the release the **Urgent** label. Sites read it in `update.latest.labels`; 
 $urgent = in_array('urgent', $answer['update']['latest']['labels'] ?? [], true);
 ```
 
-0.6.3 marked urgent releases with `[urgent]` in their release notes instead. Migration 0019 gives those releases the Urgent label and takes the marker out of their notes, so site code that looks for `[urgent]` in `changelog` must read `labels` after the upgrade.
+0.6.3 marked urgent releases with `[urgent]` in their release notes instead. Migration 0019 gives those releases the Urgent label and takes the marker out of their notes, so site code that looks for `[urgent]` in `changelog` must read `labels` from 0.7.0 on.
 
 ## Knowing which versions are installed
 

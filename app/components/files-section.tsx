@@ -1,20 +1,32 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { Link, useFetcher, useRevalidator } from "react-router"
-import { Archive, ArchiveRestore, Copy, FileUp, FlaskConical, Layers, Link2, MoreHorizontal, Paperclip, Pencil, Plus, Siren, Trash2, Upload } from "lucide-react"
+import { Archive, ArchiveRestore, Copy, FileUp, FlaskConical, Layers, Link2, MoreHorizontal, Paperclip, Pencil, Plus, Tag, Trash2, Upload, X } from "lucide-react"
 import { ConfirmAction } from "#/components/confirm-action"
 import { TrackSource, type ImportView, type SourceView } from "#/components/release-source"
 import { FieldLabel, HelpTip } from "#/components/help-tip"
+import { StatusBadge } from "#/components/status-badge"
 import { StatusPicker } from "#/components/status-picker"
 import { Ago } from "#/components/time"
 import { Badge } from "#/components/ui/badge"
 import { Button } from "#/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "#/components/ui/dialog"
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "#/components/ui/dropdown-menu"
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
+  DropdownMenuTrigger,
+} from "#/components/ui/dropdown-menu"
 import { Input } from "#/components/ui/input"
 import { NativeSelect } from "#/components/ui/native-select"
 import { Textarea } from "#/components/ui/textarea"
 import { defaultReleaseStatuses, evaluateFileAccess, MAX_FILE_BYTES } from "#/lib/files"
-import { CHANNELS, isUrgent, isValidVersion, latestRelease, MAX_CHANGELOG_LENGTH, MAX_KEEP_RELEASES, releasesToPrune, sortForDisplay, withUrgent, withoutUrgent, type Channel } from "#/lib/releases"
+import { CHANNELS, isValidVersion, latestRelease, MAX_CHANGELOG_LENGTH, MAX_KEEP_RELEASES, releasesToPrune, sortForDisplay, type Channel } from "#/lib/releases"
+import { DEFAULT_RELEASE_LABELS, keepKnownLabels, labelKeyFromName, MAX_LABEL_NAME, MAX_TRACK_LABELS, splitLabelKeys, type ReleaseLabel } from "#/lib/release-labels"
 import { describeStatusKeys, splitStatusKeys, type StatusSet } from "#/lib/statuses"
 import { statusConflicts, trackOverlaps } from "#/lib/tracks"
 import { cn } from "#/lib/utils"
@@ -25,6 +37,8 @@ export type FileRow = {
   version: string
   channel: Channel
   changelog: string
+  /** Keys of the release's labels, comma separated. */
+  labels: string
   notes: string
   sha256: string
   withdrawn_at: number | null
@@ -50,7 +64,7 @@ type LicenseState = { status: string; expires_at: number | null; domains: string
 export type SharedFiles = { appName: string; appHref: string; files: FileRow[]; statuses: StatusSet; tracks: TrackView[] }
 
 /** A release track as the pages send it: `statuses` are status keys. */
-export type TrackView = { id: string; name: string; statuses: string[]; check_domain: boolean; keep_releases: number | null }
+export type TrackView = { id: string; name: string; statuses: string[]; check_domain: boolean; keep_releases: number | null; labels: ReleaseLabel[] }
 
 /** A track of the page's owner, with the repository connected to it. */
 export type TrackPanel = { track: TrackView; source: SourceView | null; imports: ImportView[] }
@@ -65,6 +79,10 @@ const TRACK_HELP =
 const VERSION_HELP = "A version makes the file a release: sites that send their version with their check are offered it as an update. Leave it empty for an attachment such as a manual or a notice."
 const CHANNEL_HELP = "Stable releases are offered to every site. Beta releases are offered only to sites that check with channel=beta."
 const CHANGELOG_HELP = "Public. Returned to sites with the release, so they can show what changed before updating."
+const LABELS_HELP =
+  "Public. Sites receive the keys of a release's labels in labels, with the release, so their update code can act on them: for example install an urgent release at once instead of waiting for a staged rollout. The track defines which labels exist."
+const TRACK_LABELS_HELP =
+  "The labels its releases can carry, each with a colour. Sites receive the key of each label a release carries; the key is fixed once the label is saved, the name and colour can change. Removing a label removes it from the track's releases."
 
 /** Suggests a version from a file name such as harbor-theme-1.4.0.zip or plugin_v2.1.zip. */
 export function versionFromFileName(name: string): string {
@@ -149,9 +167,14 @@ export function FilesSection({
       setTimeout(() => setCopied(null), 1600)
     } catch {}
   }
+  // The labels of each track, own and inherited, to draw the labels of its releases.
+  const labelsOf = new Map([...ownTracks, ...appTracks].map((t) => [t.id, t.labels]))
+  const releaseLabels = (f: FileRow) => {
+    const defined = (f.track_id && labelsOf.get(f.track_id)) || []
+    return defined.filter((l) => splitLabelKeys(f.labels).includes(l.key))
+  }
+  const setLabels = (file: FileRow, keys: string[]) => action.submit({ intent: "update-file", fileId: file.id, labels: keys.join(",") }, { method: "post" })
   const setWithdrawn = (file: FileRow, withdrawn: boolean) => action.submit({ intent: "update-file", fileId: file.id, withdrawn: String(withdrawn) }, { method: "post" })
-  /** Adds the urgent marker to the release notes (or takes it out) and saves: sites that stage updates read it and install at once. */
-  const setUrgent = (file: FileRow, urgent: boolean) => action.submit({ intent: "update-file", fileId: file.id, changelog: urgent ? withUrgent(file.changelog) : withoutUrgent(file.changelog) }, { method: "post" })
 
   if (!configured) {
     return (
@@ -184,11 +207,7 @@ export function FilesSection({
                     <FlaskConical /> Beta
                   </Badge>
                 )}
-                {kind === "releases" && isUrgent(f.changelog) && (
-                  <Badge variant="destructive">
-                    <Siren /> Urgent
-                  </Badge>
-                )}
+                {kind === "releases" && releaseLabels(f).map((l) => <StatusBadge key={l.key} status={{ label: l.name, color: l.color }} />)}
                 {withdrawn && <Badge variant="secondary">Withdrawn</Badge>}
                 {row.shared && kind === "attachments" && <Badge variant="outline">From {shared?.appName}</Badge>}
                 {available !== null && !withdrawn && <Badge variant={available ? "success" : "secondary"}>{available ? "Available now" : "Not available now"}</Badge>}
@@ -235,10 +254,24 @@ export function FilesSection({
                       <Copy /> Copy SHA-256 checksum
                     </DropdownMenuItem>
                   )}
-                  {!row.shared && f.version && (
-                    <DropdownMenuItem onClick={() => setUrgent(f, !isUrgent(f.changelog))}>
-                      <Siren /> {isUrgent(f.changelog) ? "Remove urgent mark" : "Mark as urgent"}
-                    </DropdownMenuItem>
+                  {!row.shared && f.version && f.track_id && (labelsOf.get(f.track_id)?.length ?? 0) > 0 && (
+                    <DropdownMenuSub>
+                      <DropdownMenuSubTrigger>
+                        <Tag /> Labels
+                      </DropdownMenuSubTrigger>
+                      <DropdownMenuSubContent className="w-52">
+                        {labelsOf.get(f.track_id)!.map((l) => {
+                          const keys = splitLabelKeys(f.labels)
+                          const on = keys.includes(l.key)
+                          return (
+                            <DropdownMenuCheckboxItem key={l.key} checked={on} onCheckedChange={() => setLabels(f, on ? keys.filter((k) => k !== l.key) : [...keys, l.key])}>
+                              <span className="size-2 rounded-full" style={{ backgroundColor: l.color }} />
+                              {l.name}
+                            </DropdownMenuCheckboxItem>
+                          )
+                        })}
+                      </DropdownMenuSubContent>
+                    </DropdownMenuSub>
                   )}
                   {!row.shared && f.version && (
                     <DropdownMenuItem onClick={() => setWithdrawn(f, !withdrawn)}>
@@ -527,6 +560,7 @@ function UploadDialog({
   const [version, setVersion] = useState("")
   const [channel, setChannel] = useState<Channel>("stable")
   const [changelog, setChangelog] = useState("")
+  const [labels, setLabels] = useState<string[]>([])
   const [statuses, setStatuses] = useState<string[]>(() => defaultReleaseStatuses(statusSet))
   const [checkDomain, setCheckDomain] = useState(true)
   const [trackId, setTrackId] = useState("")
@@ -539,6 +573,7 @@ function UploadDialog({
     setVersion("")
     setChannel("stable")
     setChangelog("")
+    setLabels([])
     setStatuses(defaultReleaseStatuses(statusSet))
     setCheckDomain(true)
     setTrackId(tracks[0]?.id ?? "")
@@ -548,6 +583,9 @@ function UploadDialog({
 
   const isRelease = version.trim() !== ""
   const track = tracks.find((t) => t.id === trackId) ?? null
+  // Without a track, the track created for the release has the default labels.
+  const trackLabels = track?.labels ?? (tracks.length === 0 ? DEFAULT_RELEASE_LABELS : [])
+  const chosenLabels = keepKnownLabels(labels, trackLabels)
 
   const choose = (picked: File | undefined) => {
     if (!picked) return
@@ -568,7 +606,7 @@ function UploadDialog({
     // A release takes its availability from its track; an attachment has its own.
     const query = new URLSearchParams(
       isRelease
-        ? { name: file.name, version: version.trim(), channel, ...(track ? { track: track.id } : {}) }
+        ? { name: file.name, version: version.trim(), channel, ...(track ? { track: track.id } : {}), ...(chosenLabels.length ? { labels: chosenLabels.join(",") } : {}) }
         : { name: file.name, version: "", channel, statuses: statuses.join(","), check_domain: String(checkDomain) }
     )
     const xhr = new XMLHttpRequest()
@@ -639,7 +677,10 @@ function UploadDialog({
           <ReleaseFields version={version} setVersion={setVersion} channel={channel} setChannel={setChannel} changelog={changelog} setChangelog={setChangelog} disabled={busy} />
 
           {isRelease ? (
-            <TrackPicker tracks={tracks} value={trackId} onChange={setTrackId} statuses={statusSet} disabled={busy} />
+            <>
+              <TrackPicker tracks={tracks} value={trackId} onChange={setTrackId} statuses={statusSet} disabled={busy} />
+              <LabelPicker labels={trackLabels} value={chosenLabels} onChange={setLabels} disabled={busy} />
+            </>
           ) : (
             <>
               <div className="space-y-1.5">
@@ -679,6 +720,7 @@ function EditDialog({ file, onClose, statuses: statusSet, tracks }: { file: File
   const [channel, setChannel] = useState<Channel>("stable")
   const [changelog, setChangelog] = useState("")
   const [notes, setNotes] = useState("")
+  const [labels, setLabels] = useState<string[]>([])
   const [statuses, setStatuses] = useState<string[]>([])
   const [checkDomain, setCheckDomain] = useState(true)
   const [trackId, setTrackId] = useState("")
@@ -691,6 +733,7 @@ function EditDialog({ file, onClose, statuses: statusSet, tracks }: { file: File
     setChannel(file.channel)
     setChangelog(file.changelog)
     setNotes(file.notes)
+    setLabels(splitLabelKeys(file.labels))
     setStatuses(splitStatusKeys(file.statuses, statusSet))
     setCheckDomain(file.check_domain === 1)
     setSubmitted(false)
@@ -703,6 +746,9 @@ function EditDialog({ file, onClose, statuses: statusSet, tracks }: { file: File
   }, [submitted, update.state, update.data, onClose])
 
   const busy = update.state !== "idle"
+  // A release that moves keeps the labels its new track also defines.
+  const trackLabels = tracks.find((t) => t.id === trackId)?.labels ?? []
+  const chosenLabels = keepKnownLabels(labels, trackLabels)
   return (
     <Dialog open={file !== null} onOpenChange={(next) => !busy && !next && onClose()}>
       <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-xl" onOpenAutoFocus={(e) => e.preventDefault()}>
@@ -713,7 +759,10 @@ function EditDialog({ file, onClose, statuses: statusSet, tracks }: { file: File
         <div className="space-y-4">
           <ReleaseFields version={version} setVersion={setVersion} channel={channel} setChannel={setChannel} changelog={changelog} setChangelog={setChangelog} />
           {version.trim() ? (
-            <TrackPicker tracks={tracks} value={trackId} onChange={setTrackId} statuses={statusSet} />
+            <>
+              <TrackPicker tracks={tracks} value={trackId} onChange={setTrackId} statuses={statusSet} />
+              <LabelPicker labels={trackLabels} value={chosenLabels} onChange={setLabels} />
+            </>
           ) : (
             <>
               <div className="space-y-1.5">
@@ -746,7 +795,7 @@ function EditDialog({ file, onClose, statuses: statusSet, tracks }: { file: File
               setSubmitted(true)
               update.submit(
                 version.trim()
-                  ? { intent: "update-file", fileId: file.id, version: version.trim(), channel, changelog, notes, ...(trackId ? { track: trackId } : {}) }
+                  ? { intent: "update-file", fileId: file.id, version: version.trim(), channel, changelog, notes, labels: chosenLabels.join(","), ...(trackId ? { track: trackId } : {}) }
                   : { intent: "update-file", fileId: file.id, version: "", channel, changelog: file.changelog, notes, statuses: statuses.join(","), check_domain: String(checkDomain) },
                 { method: "post" }
               )
@@ -799,6 +848,7 @@ function TrackDialog({ track, onClose, statuses: statusSet, tracks, stored }: { 
   const [selected, setSelected] = useState<string[]>([])
   const [checkDomain, setCheckDomain] = useState(true)
   const [limit, setLimit] = useState("")
+  const [labels, setLabels] = useState<LabelDraft[]>([])
   const [submitted, setSubmitted] = useState(false)
   const editing = track !== null && track !== "new" ? track : null
 
@@ -808,6 +858,7 @@ function TrackDialog({ track, onClose, statuses: statusSet, tracks, stored }: { 
     setSelected(editing?.statuses ?? [])
     setCheckDomain(editing?.check_domain ?? true)
     setLimit(editing?.keep_releases ? String(editing.keep_releases) : "")
+    setLabels((editing?.labels ?? DEFAULT_RELEASE_LABELS).map((l) => ({ ...l, saved: Boolean(editing) })))
     setSubmitted(false)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [track])
@@ -821,9 +872,12 @@ function TrackDialog({ track, onClose, statuses: statusSet, tracks, stored }: { 
   const limitNumber = limit.trim() === "" ? null : Number(limit)
   const limitValid = limitNumber === null || (Number.isInteger(limitNumber) && limitNumber >= 1 && limitNumber <= MAX_KEEP_RELEASES)
   const doomed = editing && limitNumber !== null && limitValid ? releasesToPrune(stored[editing.id] ?? [], limitNumber) : []
+  const labelError = labelDraftError(labels)
+  // Releases of this track that lose a label when it is removed here.
+  const unlabelled = editing ? (stored[editing.id] ?? []).filter((f) => splitLabelKeys(f.labels).some((k) => !labels.some((l) => l.key === k))).length : 0
   return (
     <Dialog open={track !== null} onOpenChange={(next) => !busy && !next && onClose()}>
-      <DialogContent className="sm:max-w-lg" onOpenAutoFocus={(e) => e.preventDefault()}>
+      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg" onOpenAutoFocus={(e) => e.preventDefault()}>
         <DialogHeader>
           <DialogTitle>{editing ? `Edit ${editing.name}` : "New track"}</DialogTitle>
           <DialogDescription>A track is what a set of licence statuses receives. Each status belongs to one track at most.</DialogDescription>
@@ -874,6 +928,13 @@ function TrackDialog({ track, onClose, statuses: statusSet, tracks, stored }: { 
               </p>
             )}
           </div>
+          <LabelsEditor labels={labels} onChange={setLabels} disabled={busy} />
+          {labelError && <p className="text-xs text-destructive">{labelError}</p>}
+          {unlabelled > 0 && (
+            <p className="text-xs text-muted-foreground">
+              Saving removes the deleted labels from {unlabelled} release{unlabelled === 1 ? "" : "s"} of this track.
+            </p>
+          )}
           {submitted && save.state === "idle" && save.data?.error && <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">{save.data.error}</div>}
         </div>
         <DialogFooter>
@@ -882,11 +943,11 @@ function TrackDialog({ track, onClose, statuses: statusSet, tracks, stored }: { 
           </Button>
           <Button
             variant={doomed.length > 0 ? "destructive" : "default"}
-            disabled={busy || !name.trim() || !limitValid}
+            disabled={busy || !name.trim() || !limitValid || Boolean(labelError)}
             onClick={() => {
               setSubmitted(true)
               save.submit(
-                { intent: editing ? "update-track" : "create-track", ...(editing ? { trackId: editing.id } : {}), name: name.trim(), statuses: selected.join(","), check_domain: String(checkDomain), keep_releases: limit.trim() },
+                { intent: editing ? "update-track" : "create-track", ...(editing ? { trackId: editing.id } : {}), name: name.trim(), statuses: selected.join(","), check_domain: String(checkDomain), keep_releases: limit.trim(), labels: JSON.stringify(labels.map(({ key, name, color }) => ({ key, name: name.trim(), color }))) },
                 { method: "post" }
               )
             }}
@@ -963,5 +1024,105 @@ function DeleteTrackDialog({ track, onClose, others, releases }: { track: TrackV
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  )
+}
+
+/** Chooses the labels of a release among its track's labels. */
+function LabelPicker({ labels, value, onChange, disabled }: { labels: ReleaseLabel[]; value: string[]; onChange: (keys: string[]) => void; disabled?: boolean }) {
+  return (
+    <div className="space-y-1.5">
+      <FieldLabel help={LABELS_HELP}>Labels</FieldLabel>
+      {labels.length === 0 ? (
+        <p className="text-xs text-muted-foreground">This track defines no label. Add labels from the track&apos;s menu, Edit track.</p>
+      ) : (
+        <div className="flex flex-wrap gap-2" role="group" aria-label="Release labels">
+          {labels.map((l) => {
+            const on = value.includes(l.key)
+            return (
+              <button
+                key={l.key}
+                type="button"
+                aria-pressed={on}
+                disabled={disabled}
+                onClick={() => onChange(on ? value.filter((k) => k !== l.key) : [...value, l.key])}
+                className={cn("inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs font-medium transition-colors disabled:opacity-50", !on && "text-muted-foreground hover:bg-muted/50")}
+                style={on ? { backgroundColor: `color-mix(in srgb, ${l.color} 16%, transparent)`, borderColor: l.color, color: `color-mix(in srgb, ${l.color} 78%, var(--foreground))` } : undefined}
+              >
+                <span className="size-2 rounded-full" style={{ backgroundColor: l.color }} />
+                {l.name}
+              </button>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** A label being edited in the track dialog. `saved`: the label exists on the track, so its key no longer changes. */
+type LabelDraft = ReleaseLabel & { saved: boolean }
+
+/** What prevents saving the labels, or null. The server checks the same rules. */
+function labelDraftError(labels: LabelDraft[]): string | null {
+  if (labels.some((l) => !l.name.trim())) return "Each label needs a name."
+  if (labels.some((l) => !l.key)) return "Each label name needs at least one letter."
+  const keys = labels.map((l) => l.key)
+  const duplicate = keys.find((k, i) => keys.indexOf(k) !== i)
+  if (duplicate) return `Two labels have the key ${duplicate}: rename one of them.`
+  return null
+}
+
+const LABEL_COLORS = ["#dc2626", "#ea580c", "#ca8a04", "#16a34a", "#0891b2", "#2563eb", "#7c3aed", "#db2777", "#525252"]
+
+/** Edits the labels a track defines: name, colour, and the key derived from the name until the label is saved. */
+function LabelsEditor({ labels, onChange, disabled }: { labels: LabelDraft[]; onChange: (labels: LabelDraft[]) => void; disabled?: boolean }) {
+  const change = (index: number, patch: Partial<LabelDraft>) => onChange(labels.map((l, i) => (i === index ? { ...l, ...patch } : l)))
+  return (
+    <div className="space-y-2">
+      <FieldLabel help={TRACK_LABELS_HELP}>Release labels</FieldLabel>
+      {labels.length === 0 && <p className="text-xs text-muted-foreground">No label. Releases of this track carry none.</p>}
+      <ul className="space-y-2">
+        {labels.map((l, i) => (
+          <li key={i} className="flex items-center gap-2">
+            <input
+              type="color"
+              aria-label={`Colour of ${l.name || "the label"}`}
+              value={l.color}
+              disabled={disabled}
+              onChange={(e) => change(i, { color: e.target.value.toLowerCase() })}
+              className="h-8 w-9 shrink-0 cursor-pointer rounded-md border bg-transparent p-0.5"
+            />
+            <Input
+              aria-label="Label name"
+              value={l.name}
+              maxLength={MAX_LABEL_NAME}
+              disabled={disabled}
+              placeholder="Name"
+              // A label just added takes the focus, so its name can be typed at once.
+              autoFocus={!l.saved && !l.name && i === labels.length - 1}
+              onChange={(e) => change(i, l.saved ? { name: e.target.value } : { name: e.target.value, key: labelKeyFromName(e.target.value) })}
+              className="h-8 min-w-0 flex-1"
+            />
+            <code className="w-24 shrink-0 truncate text-xs text-muted-foreground" title={l.saved ? "Key sent to sites. Fixed once saved." : "Key sent to sites, from the name."}>
+              {l.key || "no key"}
+            </code>
+            <Button type="button" variant="ghost" size="icon" className="size-8 shrink-0" aria-label={`Remove ${l.name || "label"}`} disabled={disabled} onClick={() => onChange(labels.filter((_, j) => j !== i))}>
+              <X className="size-4" />
+            </Button>
+          </li>
+        ))}
+      </ul>
+      {labels.length < MAX_TRACK_LABELS && (
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={disabled}
+          onClick={() => onChange([...labels, { key: "", name: "", color: LABEL_COLORS[labels.length % LABEL_COLORS.length], saved: false }])}
+        >
+          <Plus /> Add label
+        </Button>
+      )}
+    </div>
   )
 }

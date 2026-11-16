@@ -1,3 +1,4 @@
+import { splitLabelKeys } from "../lib/release-labels"
 import type { IpBlock } from "./ip-blocks.server"
 import { evaluateFileAccess } from "../lib/files"
 import { parseDomains } from "../lib/license"
@@ -73,6 +74,7 @@ export function serializeFile(f: LicenseFile, license: License | null, origin: s
     version: f.version,
     channel: f.channel,
     changelog: f.changelog,
+    labels: splitLabelKeys(f.labels),
     notes: f.notes,
     size: f.size,
     content_type: f.content_type,

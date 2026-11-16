@@ -62,6 +62,15 @@ Version 0.5.0 is prepared on `develop`. A version tag identifies the approved bu
 - [ ] Select several releases in a track and delete them in one step
 - [ ] A default release limit for tracks that are created automatically on the first upload
 
+### Release labels (unreleased, version not chosen)
+
+- [x] Labels with colours defined per track; releases carry them and sites receive them in `labels` (migration 0019)
+- [x] Replaces the 0.6.3 `[urgent]` marker in release notes
+
+### 0.6.3: mark a release as urgent (2026-11-11)
+
+- [x] Mark as urgent in a release's menu (replaced by release labels)
+
 ### 0.6.2: faster page changes (2026-11-06)
 
 - [x] A link's prefetch serves the click, one database trip less at startup, later loading bar

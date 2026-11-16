@@ -16,6 +16,14 @@ The export contains everything Warden stores, including the private signing key 
 
 Database migrations run by themselves on the first request after the update, and only move forward: to go back to an earlier version, restore the export.
 
+## 0.6.3 to the next version (release labels)
+
+Back up D1 first. Migration 0019 runs by itself.
+
+- **Site code:** releases have `labels`, a list of keys such as `["urgent"]`, in the check answer (`update.latest.labels`) and the download list. The `[urgent]` marker of 0.6.3 is gone: the migration turns it into the Urgent label and removes it from the notes. Code that looked for `[urgent]` in `changelog` must check `in_array('urgent', $latest['labels'])` instead, or urgent releases are treated as ordinary ones.
+- **API:** files have `labels`; uploads take `labels=` and file `PATCH` takes `labels: []`; tracks have `labels: [{ key, name, color }]`. A label that is not one of the track's returns `422`.
+- Existing tracks get the default labels (Urgent, Security, Bug fix, New feature) until you change them.
+
 ## 0.5 to 0.6
 
 Back up D1 first. Migrations 0017 (release limit per track) and 0018 (channel on reported versions) run by themselves. Site code needs no change: the check response and download links are the same.

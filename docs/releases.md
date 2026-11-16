@@ -24,7 +24,7 @@ A track is what a set of licence statuses receives. An app has one or more track
 - Each tagged app attachment follows its app's tracks, selected by its own status. Migrated custom project apps retain their old release overrides and inherit the original app's tracks for other statuses. New custom projects use an app of their own.
 - A status that no track serves receives no update.
 
-Create, rename and delete tracks on the *Releases* tab (*New track*, and the track's menu). Changing a track's statuses applies to all its releases at once. Deleting a track moves its releases to another track first. A track can also limit how many releases it keeps ([below](#release-limit)).
+Create, rename and delete tracks on the *Releases* tab (*New track*, and the track's menu). Changing a track's statuses applies to all its releases at once. Deleting a track moves its releases to another track first. A track can also limit how many releases it keeps ([below](#release-limit)) and defines the labels its releases carry ([below](#release-labels)).
 
 ### Release limit
 
@@ -37,6 +37,16 @@ A track that publishes often grows without end. Give it a **release limit** (*Ed
 - A repository import does not publish a deleted version again: the tag stays recorded as imported.
 - Leave the limit empty (the default) to keep every release. Attachments and other tracks are never touched. The limit is a whole number from 1 to 1000.
 
+### Release labels
+
+Labels say what kind of release it is: **Urgent**, **Security**, **Bug fix**, **New feature**, or anything you define. Sites receive them with the release, so their update code can act on them, for example install an urgent release at once instead of waiting for its share of a staged rollout.
+
+- **Each track defines its labels**, each with a name and a colour (*Edit track*, *Release labels*). A new track starts with Urgent (`urgent`), Security (`security`), Bug fix (`bug_fix`) and New feature (`feature`); tracks created before migration 0019 use the same four until you change them. Up to 20 labels per track.
+- A label has a **key**, which is what sites receive. It is made from the name when you add the label (*Long-term support* gives `long_term_support`) and **stays fixed once saved**, so renaming or recolouring a label never breaks site code.
+- **A release carries any number of its track's labels.** Choose them when you upload, in *Edit*, or from the release's menu, *Labels*. Each one shows as a badge in its colour.
+- Removing a label from a track removes it from the track's releases. A release moved to another track keeps only the labels that track also has.
+- Labels are public: they appear in the check answer and the download list, in `labels`, as a list of keys (`["urgent", "security"]`, or `[]`).
+
 Files without a version (attachments) are not in a track: each one keeps its own release rule ([files.md](files.md)).
 
 **Earlier releases** (from before tracks existed) were put into tracks automatically, one per distinct release rule, so nobody gained or lost access. If two of them serve the same status, the *Releases* tab says so: edit the tracks until each status belongs to one.
@@ -48,6 +58,7 @@ Files without a version (attachments) are not in a track: each one keeps its own
 | **Version** | Numbers separated by dots (one to four), an optional leading `v`, an optional pre-release suffix and an optional build suffix. Examples: `1.4.0`, `v2.1`, `2.0.0-beta.1`, `2.0.0+build.7`. Versions are compared by semantic versioning precedence: `1.10.0` is newer than `1.9.2`, `2.0` equals `2.0.0`, and `2.0.0` is newer than `2.0.0-rc.1`. |
 | **Channel** | `stable` (default) or `beta`. Sites receive stable releases unless they ask for the beta channel, in which case they receive the newest of both. |
 | **Release notes** | Public text (up to 10,000 characters) returned with the release, so a site can show "what's new" before installing. |
+| **Labels** | Public keys such as `urgent` or `security`, chosen among the labels of the release's track ([above](#release-labels)), returned with the release in `labels`. |
 | **Checksum** | The SHA-256 of the file, computed by Warden during the upload. Returned with the release and sent as the `X-Warden-Sha256` header of the download, so an updater can verify what it received. Files uploaded before checksums were introduced have none. |
 | **Signature** | Ed25519 signature of the checksum, made with the installation's signing key. Returned with the release (`signature`) and sent as the `X-Warden-Release-Signature` header of the download, so an updater can verify that the package was published by you ([below](#verifying-a-package)). `null` for a file without a checksum. |
 | **Withdrawn** | A withdrawn release is no longer offered, no longer listed, and its download returns HTTP 410. It stays on record and can be restored. Use it to pull a bad build without losing its history. |
@@ -86,6 +97,7 @@ GET https://<your-worker>/check/<licence key>?tag=parent-theme&domain=harborstud
       "version": "1.4.0",
       "channel": "stable",
       "changelog": "Faster gallery. Fixes the mobile menu.",
+      "labels": ["security"],
       "size": 3145728,
       "sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
       "signature": "<Ed25519 signature of sha256, base64>",
@@ -98,6 +110,7 @@ GET https://<your-worker>/check/<licence key>?tag=parent-theme&domain=harborstud
 
 - `latest` is the newest release this licence can download **right now**, for this domain, in the site's channel: the release rule is applied exactly as for a download. A suspended licence is offered nothing; a release published only for Completed licences is offered once the licence is Completed.
 - `available` is `true` when `latest` is newer than `current`.
+- `labels` lists the keys of the release's labels, such as `urgent` ([release labels](#release-labels)); it is `[]` when the release has none.
 - `download_url` is a signed download link valid for 7 days ([files.md](files.md#download-links)). It carries the tag and domain and does not contain the licence key, so the site can hand it to its updater as is.
 - Add `&channel=beta` to receive beta releases too.
 - The whole response, `update` included, is signed with the installation's Ed25519 key ([checking.md](checking.md#verifying-the-signature)).
@@ -109,7 +122,13 @@ The same fields can be sent in a POST body: `{ "tag": "parent-theme", "domain": 
 
 ### Urgent releases
 
-Warden has no urgent flag. A release is urgent when its public release notes contain `[urgent]` (any case). **Mark as urgent** in a release's menu adds that line to the notes and saves, and **Remove urgent mark** takes it out; the release shows an **Urgent** badge while the marker is there. The marker travels in `update.latest.changelog` of the check answer. Whether it means anything is up to the site's updater: a client that staggers its updates can read the marker and install at once.
+Give the release the **Urgent** label. Sites read it in `update.latest.labels`; what it means is up to the site's updater, for example installing at once instead of waiting for a staged rollout:
+
+```php
+$urgent = in_array('urgent', $answer['update']['latest']['labels'] ?? [], true);
+```
+
+0.6.3 marked urgent releases with `[urgent]` in their release notes instead. Migration 0019 gives those releases the Urgent label and takes the marker out of their notes, so site code that looks for `[urgent]` in `changelog` must read `labels` after the upgrade.
 
 ## Knowing which versions are installed
 

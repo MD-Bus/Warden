@@ -1,3 +1,4 @@
+import { readTrackLabels } from "../lib/release-labels"
 import { getTemplate, listTemplates, saveTemplate, saveBundle, serializeBundle, renewBundle, listAttachments } from "./entitlements.server"
 import { KEY_PATTERN } from "../lib/license"
 import { DEFAULT_STATUSES, defaultStatusKey, findStatus, type StatusSet } from "../lib/statuses"
@@ -315,6 +316,7 @@ async function filesRoute(ctx: Context, owner: FileOwner, fileId: string | undef
       notes: q.get("notes") ?? "",
       channel: q.get("channel") ?? undefined,
       changelog: q.get("changelog") ?? "",
+      labels: q.get("labels") ?? undefined,
       contentType: request.headers.get("content-type"),
       size: Number(request.headers.get("content-length")),
       body: request.body,
@@ -341,6 +343,7 @@ async function filesRoute(ctx: Context, owner: FileOwner, fileId: string | undef
       notes: typeof body.notes === "string" ? body.notes : undefined,
       channel: typeof body.channel === "string" ? body.channel : undefined,
       changelog: typeof body.changelog === "string" ? body.changelog : undefined,
+      labels: body.labels,
       withdrawn: typeof body.withdrawn === "boolean" ? body.withdrawn : undefined,
     })
     return "error" in updated ? fail(updated.status, "invalid_file", updated.error) : reply(await shape(updated.file))
@@ -371,6 +374,7 @@ async function serializeTrack(ctx: Context, track: ReleaseTrack, sources: Releas
   const source = sources.find((s) => s.track_id === track.id)
   return {
     id: track.id, name: track.name, statuses: track.statuses.split(",").filter(Boolean), check_domain: track.check_domain === 1, position: track.position, keep_releases: track.keep_releases,
+    labels: readTrackLabels(track.labels),
     releases: stats?.releases ?? 0, source: source ? await serializeSource(ctx, source) : null,
     created_at: iso(track.created_at), updated_at: iso(track.updated_at),
   }

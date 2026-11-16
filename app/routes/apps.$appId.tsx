@@ -22,6 +22,7 @@ import { deleteApp, getApp, getAppSummary, versionsInUse, type App } from "~/ser
 import { applyFileForm, listFiles, storageConfigured } from "~/server/files.server"
 import { applySourceForm, trackPanels } from "~/server/sources.server"
 import { applyTrackForm, listAppTracks } from "~/server/tracks.server"
+import { trackView } from "#/lib/tracks"
 import { getGitHubApp } from "~/server/github-app.server"
 import { applyStatusForm, getStatusSetForApp, hasCustomSet, statusCounts } from "~/server/statuses.server"
 import { queryLicenses } from "~/server/licenses.server"
@@ -57,7 +58,7 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
         appName: baseApp.name,
         appHref: `/apps/${baseApp.id}`,
         statuses,
-        tracks: baseTracks.map((t) => ({ ...t, statuses: t.statuses.split(","), check_domain: t.check_domain === 1 })),
+        tracks: baseTracks.map(trackView),
         files: baseFiles.map((f) => (f.track_id ? { ...f, statuses: f.statuses.split(",").filter((s) => !covered.has(s)).join(",") } : f)),
       }
     : null

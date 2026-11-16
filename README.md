@@ -42,6 +42,10 @@ Tags are unique within a licence and separate from Git version tags or release t
 
 Release limit per track, accurate outdated and up-to-date sites, the optional `WARDEN_SIGNING_KEY` secret, and a clearer overview and licence list. Migrations run by themselves; site code needs no change. See the [upgrade notes](docs/upgrade-notes.md).
 
+## Release labels (unreleased)
+
+Each release track defines labels with a colour (Urgent, Security, Bug fix, New feature by default, or your own), and each release carries any of them. Sites receive the keys in `labels` with the release, so an updater can, for example, install an urgent release at once. This replaces the 0.6.3 urgent marker: site code that reads `[urgent]` in the release notes must read `labels`. Migration 0019 runs by itself. See [releases.md](docs/releases.md#release-labels).
+
 ## Patches 0.6.1, 0.6.2 and 0.6.3
 
 0.6.1 stops requests waiting forever after a cancelled request. 0.6.2 makes moving between dashboard pages faster. 0.6.3 adds **Mark as urgent** to a release's menu, which puts `[urgent]` in its release notes, with an Urgent badge. No migration and no change to site code.
@@ -77,7 +81,7 @@ Warden manages licences and answers checks. **Enforcement lives in the customer'
 - Multiple apps under one licence key, with independent statuses and shared domain/site limits. Parent and child themes on one domain consume one slot.
 - Shared or separate expiry dates, per-app renewals, grace periods, permanent Completed access, customer details and internal notes.
 - Licence templates with stable tags, required/optional slots and optional default apps.
-- App-owned release tracks, stable/beta channels, release notes, SHA-256 checksums, withdrawal and restoration. Reported versions are stored per tag and domain.
+- App-owned release tracks, stable/beta channels, release notes, release labels with colours defined per track (sent to sites in `labels`), SHA-256 checksums, withdrawal and restoration. Reported versions are stored per tag and domain.
 - Publishing from GitHub through a GitHub App or a token and webhook. Imports stream large archives through R2 and resume after interruptions.
 - Scoped REST API keys, CSV exports with one row per attachment, traffic analytics, an IP blocklist, rate limits and blocking rules.
 - Signed outgoing webhooks for licence changes, renewals, expiry, grace and missing checks, with app/tag context and retries.

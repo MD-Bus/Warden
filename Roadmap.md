@@ -1,6 +1,6 @@
 # Roadmap
 
-Warden is **pre-1.0** (current version: 0.8.0, unreleased; next milestone: 0.9.0). The data model, the check response and the `/api/v1` endpoints can still change between 0.x versions; changes are listed in [CHANGELOG.md](CHANGELOG.md). Version 1.0.0 means the check response and API are stable and only change in backward compatible ways. The Deploy button installs `main`; the approved `develop` build becomes the default after its release pull request is merged.
+Warden is **pre-1.0** (current version: 0.8.0, 2026-11-15; next milestone: 0.9.0). The data model, the check response and the `/api/v1` endpoints can still change between 0.x versions; changes are listed in [CHANGELOG.md](CHANGELOG.md). Version 1.0.0 means the check response and API are stable and only change in backward compatible ways. The Deploy button installs `main`; the approved `develop` build becomes the default after its release pull request is merged.
 
 This is a plan, not a promise. Order can change.
 
@@ -56,13 +56,13 @@ Warden uses [semantic versioning](https://semver.org/). The version is in `packa
 
 Version 0.5.0 is prepared on `develop`. A version tag identifies the approved build; `main` and the public documentation continue through their release pull requests.
 
-### Release limit per track (unreleased, version to be decided)
+### Release limit per track (0.6.0)
 
 - [x] A track keeps the newest N releases; older ones are deleted with their files when a release is added or the limit is lowered (migration 0017)
 - [ ] Select several releases in a track and delete them in one step
 - [ ] A default release limit for tracks that are created automatically on the first upload
 
-### 0.8.0: channels per track (unreleased)
+### 0.8.0: channels per track (2026-11-15)
 
 - [x] Channels defined per track, Stable and Beta by default, each able to include others (migration 0020)
 - [x] A repository and branch per channel; a tag publishes on the channel whose branch has it

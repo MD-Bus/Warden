@@ -7,7 +7,7 @@ All notable changes, newest first. Warden follows [semantic versioning](https://
 - **0.9.0, trust**: end-to-end tests on real Cloudflare (GitHub App, private repositories, phone width, CI), backups and export, two-factor sign-in or Cloudflare Access, a complete OpenAPI description checked by tests, independent security review
 - **1.0.0**: the check response and the API are frozen
 
-## 0.8.0 (unreleased)
+## 0.8.0 (2026-11-15)
 
 Channels per track, each following its own repository and branch. Migration 0020 runs by itself. Sites built for earlier versions keep working unchanged. See [upgrade-notes.md](docs/upgrade-notes.md).
 
